@@ -129,6 +129,14 @@ function Invoke-Git {
     return $text
 }
 
+# Get-Content -Raw decodes BOM-less files as ANSI on Windows PowerShell, which
+# mangles the UTF-8 localized Notes lines in TOCs; ReadAllText defaults to UTF-8
+function Read-TextFile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    return [IO.File]::ReadAllText($Path)
+}
+
 function Write-TextFile {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -181,7 +189,7 @@ function Get-TocUpdatePlan {
         [Parameter(Mandatory)][string]$VersionBump
     )
 
-    $raw = Get-Content -LiteralPath $TocPath -Raw
+    $raw = Read-TextFile -Path $TocPath
 
     $ifaceMatch = [regex]::Match($raw, '(?m)^##[ \t]*Interface:[ \t]*([^\r\n]+)')
     if (-not $ifaceMatch.Success) {
@@ -226,7 +234,10 @@ function Get-TocUpdatePlan {
     $seen = @{}
     $deduped = @($mapped | Where-Object { -not $seen.ContainsKey($_) -and ($seen[$_] = $true) })
 
-    $newLine = "## Interface: " + ($deduped -join ", ")
+    # Largest (newest) interface first
+    $sorted = @($deduped | Sort-Object { [int]$_ } -Descending)
+
+    $newLine = "## Interface: " + ($sorted -join ", ")
 
     $vm = [regex]::Match($oldVersion, '^(\d+)\.(\d+)\.(\d+)$')
     if (-not $vm.Success) {
@@ -266,7 +277,7 @@ function Add-ChangelogEntry {
         [Parameter(Mandatory)][string]$EntryText
     )
 
-    $raw = Get-Content -LiteralPath $ChangelogPath -Raw
+    $raw = Read-TextFile -Path $ChangelogPath
 
     $nl = "`n"
     if ($raw -match "`r`n") { $nl = "`r`n" }

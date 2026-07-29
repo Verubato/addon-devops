@@ -87,7 +87,8 @@ function Get-Changelog {
 
     if (Test-Path -LiteralPath $path) {
         Write-Host ("Using changelog: {0}" -f $path)
-        return Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+        # ReadAllText defaults to UTF-8; Get-Content -Raw would decode BOM-less files as ANSI
+        return [IO.File]::ReadAllText($path)
     }
 
     throw "No changelog.md found in parent directory"
