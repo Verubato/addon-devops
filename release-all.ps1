@@ -463,6 +463,9 @@ foreach ($repo in $repos) {
 
         Push-Location (Join-Path $repo.FullName "build")
         try {
+            # Strict mode propagates to child scripts, which aren't written for it
+            Set-StrictMode -Off
+
             $step = "build"
             & .\build.ps1
 
@@ -470,6 +473,7 @@ foreach ($repo in $repos) {
             & .\publish.ps1 -ReleaseType $ReleaseType
         }
         finally {
+            Set-StrictMode -Version Latest
             Pop-Location
         }
 

@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-# locate the toc file in src
-$tocFiles = Get-ChildItem -Path "..\src" -Filter "*.toc" -File
+# locate the toc file in src (@() so .Count works under a caller's strict mode)
+$tocFiles = @(Get-ChildItem -Path "..\src" -Filter "*.toc" -File)
 
 if ($tocFiles.Count -eq 0) {
     Write-Error "No .toc file found in src"
