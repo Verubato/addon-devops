@@ -14,18 +14,19 @@ For each repo that has build\publish.ps1:
   5. changelog.md: prepend a "## <version>" entry containing the message
      (publish.ps1 uses that entry as the GitHub release notes)
   6. git commit (only the files above) + push
-  7. build\build.ps1  -> <version>.zip
-  8. build\publish.ps1 -> CurseForge upload + GitHub release
+  7. git tag <version> (e.g. 1.2.3) + push the tag
+  8. build\build.ps1  -> <version>.zip
+  9. build\publish.ps1 -> CurseForge upload + GitHub release (attaches to the tag)
 
 Because the addons consume these scripts through the build submodule, this
 repo (AddonDevOps) must be committed and pushed before a real run; the
 script checks and refuses to start otherwise.
 
-Repos whose TOC already has the new interface (and, in replace mode, not
-the old one) skip steps 3-6 and go straight to build + publish, so the
-script is safe to re-run after a partial failure. Note: a re-run of a repo that already
-uploaded to CurseForge will upload a duplicate file there; use
-publish.ps1 -SkipCurseForge manually for that case.
+Repos that already support the new version (TOC has the new interface and,
+in replace mode, no longer has the old one) are skipped entirely, so
+re-running after a partial failure won't touch or re-publish the repos
+that already completed. A repo that failed midway through its own release
+should be finished manually: cd <repo>\build; .\build.ps1; .\publish.ps1
 
 Usage:
   .\release-all.ps1 -OldGameVersion 12.0.7 -NewGameVersion 12.1 -DryRun
@@ -149,6 +150,22 @@ function Write-TextFile {
 
     $encoding = New-Object System.Text.UTF8Encoding($hasBom)
     [IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
+# Tags HEAD with the version (if not already tagged) and pushes the tag.
+# Safe to re-run: an existing tag is kept, pushing an up-to-date tag is a no-op.
+function New-VersionTag {
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    $existing = Invoke-Git -RepoPath $RepoPath -GitArgs @("tag", "-l", "--", $Version)
+    if ($existing.Trim() -eq "") {
+        Invoke-Git -RepoPath $RepoPath -GitArgs @("tag", "--", $Version) | Out-Null
+    }
+
+    Invoke-Git -RepoPath $RepoPath -GitArgs @("push", "origin", ("refs/tags/{0}" -f $Version)) | Out-Null
 }
 
 # Brings <repo>\build up to date with this repo's remote (submodule) or working
@@ -412,14 +429,15 @@ foreach ($repo in $repos) {
 
         if ($DryRun) {
             if ($plan.AlreadyUpdated) {
-                Write-Host ("Already updated (version {0}); would build + publish only." -f $plan.OldVersion)
+                Write-Host ("Already supports {0}; would skip." -f $newInterface)
+                $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $plan.OldVersion; Status = "Skipped"; Detail = ("already supports {0}" -f $newInterface) })
             } else {
                 Write-Host ("  {0}" -f $plan.OldLine)
                 Write-Host ("> {0}" -f $plan.NewLine)
                 Write-Host ("Version:   {0}" -f $versionInfo)
                 Write-Host ("Changelog: + ## {0} - {1}" -f $plan.NewVersion, $Message)
+                $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "DryRun"; Detail = "" })
             }
-            $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "DryRun"; Detail = "" })
             continue
         }
 
@@ -431,23 +449,15 @@ foreach ($repo in $repos) {
         $plan = Get-TocUpdatePlan -TocPath $tocFile.FullName -OldInterface $oldInterface -NewInterface $newInterface -VersionBump $VersionBump
         $versionInfo = "{0} -> {1}" -f $plan.OldVersion, $plan.NewVersion
 
-        $step = "sync build scripts"
-        $scriptPaths = @(Sync-BuildScripts -RepoPath $repo.FullName)
-
         if ($plan.AlreadyUpdated) {
-            Write-Host ("Already updated (version {0}); building + publishing only." -f $plan.OldVersion)
-            $versionInfo = $plan.OldVersion
-
-            if ($scriptPaths.Count -gt 0) {
-                $step = "commit"
-                Invoke-Git -RepoPath $repo.FullName -GitArgs (@("add", "--") + $scriptPaths) | Out-Null
-                Invoke-Git -RepoPath $repo.FullName -GitArgs @("commit", "-m", "Updated build scripts.") | Out-Null
-
-                $step = "push"
-                Invoke-Git -RepoPath $repo.FullName -GitArgs @("push") | Out-Null
-            }
+            Write-Host ("Already supports {0} (version {1}); skipping." -f $newInterface, $plan.OldVersion)
+            $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $plan.OldVersion; Status = "Skipped"; Detail = ("already supports {0}" -f $newInterface) })
+            continue
         }
         else {
+            $step = "sync build scripts"
+            $scriptPaths = @(Sync-BuildScripts -RepoPath $repo.FullName)
+
             $tocRel       = "src/{0}" -f $tocFile.Name
             $changelogRel = "changelog.md"
 
@@ -470,6 +480,9 @@ foreach ($repo in $repos) {
 
             $step = "push"
             Invoke-Git -RepoPath $repo.FullName -GitArgs @("push") | Out-Null
+
+            $step = "tag"
+            New-VersionTag -RepoPath $repo.FullName -Version $plan.NewVersion
         }
 
         Push-Location (Join-Path $repo.FullName "build")
