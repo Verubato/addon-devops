@@ -18,6 +18,10 @@ For each repo that has build\publish.ps1:
   8. build\build.ps1  -> <version>.zip
   9. build\publish.ps1 -> CurseForge upload + GitHub release (attaches to the tag)
 
+Addons whose TOC has no "## X-Curse-Project-ID:" line (e.g. SaneCVars,
+SimpleWood) are treated as unpublished: they get steps 1-7 (version bump,
+changelog, commit, tag) but no build and no publishing.
+
 Because the addons consume these scripts through the build submodule, this
 repo (AddonDevOps) must be committed and pushed before a real run; the
 script checks and refuses to start otherwise.
@@ -224,10 +228,14 @@ function Get-TocUpdatePlan {
 
     $oldVersion = $verMatch.Groups[1].Value.Trim()
 
+    # No CurseForge project = local/unpublished addon: version + tag only
+    $hasCurseId = [regex]::IsMatch($raw, '(?m)^##[ \t]*X-Curse-Project-ID[ \t]*:')
+
     # Already on the new patch (and old one removed, in replace mode) -> nothing to edit (resume case)
     if ($hasNew -and -not $hasOld) {
         return [pscustomobject]@{
             AlreadyUpdated = $true
+            HasCurseId     = $hasCurseId
             OldVersion     = $oldVersion
             NewVersion     = $oldVersion
             OldLine        = $ifaceMatch.Value
@@ -279,6 +287,7 @@ function Get-TocUpdatePlan {
 
     return [pscustomobject]@{
         AlreadyUpdated = $false
+        HasCurseId     = $hasCurseId
         OldVersion     = $oldVersion
         NewVersion     = $newVersion
         OldLine        = $ifaceMatch.Value
@@ -436,7 +445,13 @@ foreach ($repo in $repos) {
                 Write-Host ("> {0}" -f $plan.NewLine)
                 Write-Host ("Version:   {0}" -f $versionInfo)
                 Write-Host ("Changelog: + ## {0} - {1}" -f $plan.NewVersion, $Message)
-                $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "DryRun"; Detail = "" })
+
+                $detail = ""
+                if (-not $plan.HasCurseId) {
+                    Write-Host "No CurseForge project ID - would commit + tag without publishing."
+                    $detail = "version + tag only (no CurseForge ID)"
+                }
+                $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "DryRun"; Detail = $detail })
             }
             continue
         }
@@ -485,23 +500,29 @@ foreach ($repo in $repos) {
             New-VersionTag -RepoPath $repo.FullName -Version $plan.NewVersion
         }
 
-        Push-Location (Join-Path $repo.FullName "build")
-        try {
-            # Strict mode propagates to child scripts, which aren't written for it
-            Set-StrictMode -Off
+        if ($plan.HasCurseId) {
+            Push-Location (Join-Path $repo.FullName "build")
+            try {
+                # Strict mode propagates to child scripts, which aren't written for it
+                Set-StrictMode -Off
 
-            $step = "build"
-            & .\build.ps1
+                $step = "build"
+                & .\build.ps1
 
-            $step = "publish"
-            & .\publish.ps1 -ReleaseType $ReleaseType
+                $step = "publish"
+                & .\publish.ps1 -ReleaseType $ReleaseType
+            }
+            finally {
+                Set-StrictMode -Version Latest
+                Pop-Location
+            }
+
+            $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "OK"; Detail = "" })
         }
-        finally {
-            Set-StrictMode -Version Latest
-            Pop-Location
+        else {
+            Write-Host "No CurseForge project ID - committed + tagged without publishing."
+            $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "OK"; Detail = "version + tag only (no CurseForge ID)" })
         }
-
-        $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $versionInfo; Status = "OK"; Detail = "" })
     }
     catch {
         $msg = $_.Exception.Message
