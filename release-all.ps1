@@ -22,6 +22,10 @@ Addons whose TOC has no "## X-Curse-Project-ID:" line (e.g. SaneCVars,
 SimpleWood) are treated as unpublished: they get steps 1-7 (version bump,
 changelog, commit, tag) but no build and no publishing.
 
+Game families are never crossed: a classic-only addon (no interface number
+>= 100000 in its TOC, e.g. MiniHealthNumbers) is skipped when adding a
+retail version, and retail-only addons are skipped for classic versions.
+
 Because the addons consume these scripts through the build submodule, this
 repo (AddonDevOps) must be committed and pushed before a real run; the
 script checks and refuses to start otherwise.
@@ -231,16 +235,35 @@ function Get-TocUpdatePlan {
     # No CurseForge project = local/unpublished addon: version + tag only
     $hasCurseId = [regex]::IsMatch($raw, '(?m)^##[ \t]*X-Curse-Project-ID[ \t]*:')
 
+    # Never introduce a new game family: retail interfaces are >= 100000,
+    # classic-family below. A classic-only addon (e.g. MiniHealthNumbers) must
+    # not get a retail number, and vice versa.
+    $newIsRetail = [int]$NewInterface -ge 100000
+    $familyEntries = @($entries | Where-Object { ([int]$_ -ge 100000) -eq $newIsRetail })
+    if ($familyEntries.Count -eq 0) {
+        return [pscustomobject]@{
+            AlreadyUpdated    = $false
+            UnsupportedFamily = $true
+            HasCurseId        = $hasCurseId
+            OldVersion        = $oldVersion
+            NewVersion        = $oldVersion
+            OldLine           = $ifaceMatch.Value
+            NewLine           = $ifaceMatch.Value
+            NewContent        = $raw
+        }
+    }
+
     # Already on the new patch (and old one removed, in replace mode) -> nothing to edit (resume case)
     if ($hasNew -and -not $hasOld) {
         return [pscustomobject]@{
-            AlreadyUpdated = $true
-            HasCurseId     = $hasCurseId
-            OldVersion     = $oldVersion
-            NewVersion     = $oldVersion
-            OldLine        = $ifaceMatch.Value
-            NewLine        = $ifaceMatch.Value
-            NewContent     = $raw
+            AlreadyUpdated    = $true
+            UnsupportedFamily = $false
+            HasCurseId        = $hasCurseId
+            OldVersion        = $oldVersion
+            NewVersion        = $oldVersion
+            OldLine           = $ifaceMatch.Value
+            NewLine           = $ifaceMatch.Value
+            NewContent        = $raw
         }
     }
 
@@ -286,13 +309,14 @@ function Get-TocUpdatePlan {
     $newContent = ([regex]([regex]::Escape($verMatch.Value))).Replace($newContent, "## Version: $newVersion", 1)
 
     return [pscustomobject]@{
-        AlreadyUpdated = $false
-        HasCurseId     = $hasCurseId
-        OldVersion     = $oldVersion
-        NewVersion     = $newVersion
-        OldLine        = $ifaceMatch.Value
-        NewLine        = $newLine
-        NewContent     = $newContent
+        AlreadyUpdated    = $false
+        UnsupportedFamily = $false
+        HasCurseId        = $hasCurseId
+        OldVersion        = $oldVersion
+        NewVersion        = $newVersion
+        OldLine           = $ifaceMatch.Value
+        NewLine           = $newLine
+        NewContent        = $newContent
     }
 }
 
@@ -436,8 +460,15 @@ foreach ($repo in $repos) {
         $plan = Get-TocUpdatePlan -TocPath $tocFile.FullName -OldInterface $oldInterface -NewInterface $newInterface -VersionBump $VersionBump
         $versionInfo = "{0} -> {1}" -f $plan.OldVersion, $plan.NewVersion
 
+        $familyName = "classic"
+        if ([int]$newInterface -ge 100000) { $familyName = "retail" }
+
         if ($DryRun) {
-            if ($plan.AlreadyUpdated) {
+            if ($plan.UnsupportedFamily) {
+                Write-Host ("Does not support {0}; would skip." -f $familyName)
+                $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $plan.OldVersion; Status = "Skipped"; Detail = ("no {0} support" -f $familyName) })
+            }
+            elseif ($plan.AlreadyUpdated) {
                 Write-Host ("Already supports {0}; would skip." -f $newInterface)
                 $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $plan.OldVersion; Status = "Skipped"; Detail = ("already supports {0}" -f $newInterface) })
             } else {
@@ -463,6 +494,12 @@ foreach ($repo in $repos) {
         $step = "toc"
         $plan = Get-TocUpdatePlan -TocPath $tocFile.FullName -OldInterface $oldInterface -NewInterface $newInterface -VersionBump $VersionBump
         $versionInfo = "{0} -> {1}" -f $plan.OldVersion, $plan.NewVersion
+
+        if ($plan.UnsupportedFamily) {
+            Write-Host ("Does not support {0} (version {1}); skipping." -f $familyName, $plan.OldVersion)
+            $results.Add([pscustomobject]@{ Repo = $repo.Name; Version = $plan.OldVersion; Status = "Skipped"; Detail = ("no {0} support" -f $familyName) })
+            continue
+        }
 
         if ($plan.AlreadyUpdated) {
             Write-Host ("Already supports {0} (version {1}); skipping." -f $newInterface, $plan.OldVersion)
