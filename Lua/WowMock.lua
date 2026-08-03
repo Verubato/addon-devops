@@ -502,6 +502,14 @@ function widget:StopMovingOrSizing() end
 
 function widget:SetAttribute(key, value)
 	self.__attributes[key] = value
+
+	-- Attributes are how secure code signals across the taint boundary, so a frame that sets
+	-- one is usually asking a handler to do the work. LibUIDropDownMenu builds its menu
+	-- buttons this way, and a SetAttribute that only stored the value left them missing.
+	--
+	-- Fires on every call, not only on a change: the library sets the same flag to true once
+	-- per button it needs, and a change-only handler stops after the first.
+	runScript(self, "OnAttributeChanged", key, value)
 end
 
 function widget:GetAttribute(key)
@@ -511,6 +519,14 @@ end
 function widget:Execute() end
 function widget:WrapScript() end
 function widget:SetFrameRef() end
+
+function widget:SetWindow(window)
+	self.__window = window
+end
+
+function widget:GetWindow()
+	return self.__window
+end
 
 -- Widget: child region factories
 
