@@ -1,11 +1,16 @@
-# Warns when an addon's pinned build submodule is behind the shared repository.
+# Fails when an addon's pinned build submodule is behind the shared repository.
 #
 # Nothing otherwise notices the drift: each addon records its own gitlink, so updating
 # addon-devops leaves every addon on whatever commit it was pinned to until someone bumps it by
-# hand. This reports, it never fails - an addon pinned deliberately to an older commit is a
-# legitimate choice, and a stale pin is not a reason to block a build.
+# hand. The workflow makes that worse rather than better, because it checks the shared scripts
+# out at their default branch rather than at the pinned commit - so a stale pin means CI is
+# running scripts the addon has never recorded, and a path change in the shared repository
+# breaks the addon without its own history showing anything.
+#
+# Skipped rather than failed when there is nothing to compare: not a submodule at all, tracked
+# as plain files, or no checkout present.
 
-# Two levels up: this script sits in <addon>/build/Reports/.
+# Two levels up: this script sits in <addon>/build/Checks/.
 $addonRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 
 # The commit the addon's index records for the build path.
@@ -39,12 +44,12 @@ if ($pinned -eq $checkedOut) {
 
 $message = "build is pinned to $($pinned.Substring(0,7)) but the shared repository is at $($checkedOut.Substring(0,7))"
 
-# ::warning:: surfaces in the Actions run summary; plain text is enough locally.
+# ::error:: surfaces as a red annotation on the run; plain text is enough locally.
 if ($env:GITHUB_ACTIONS) {
-    Write-Host "::warning title=Build submodule is behind::$message"
+    Write-Host "::error title=Build submodule is behind::$message"
 }
 else {
     Write-Host "[Submodule] $message"
 }
 
-exit 0
+exit 1

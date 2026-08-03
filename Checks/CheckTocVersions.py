@@ -1,4 +1,4 @@
-"""Warns when an addon's TOC interface versions are behind the live WoW clients.
+"""Fails when an addon's TOC interface versions are behind the live WoW clients.
 
 Run:        python CheckTocVersions.py [addon-root]
 Self-test:  python CheckTocVersions.py --self-test
@@ -14,8 +14,18 @@ warning. An addon only cares about the clients it actually ships for, so a live 
 compared against a TOC that already lists SOME interface with the same major version - MiniCC
 targeting only 12.x is not behind on Classic Era, it simply does not support it.
 
-Reports, never fails: a client can go live hours before an addon is retested, and blocking the
-build on that helps nobody. Network trouble is skipped over for the same reason.
+An addon behind a LIVE client fails the build - it is greyed out in the character-select addon
+list until the TOC is bumped, which is worth blocking on.
+
+Two things deliberately do not fail. A test-realm build is not a live client, and an addon is
+free to wait for a PTR build to go live before adopting it. And an unreachable or restructured
+wiki page exits 0 with a note, because whether the build passes must not depend on a third
+party site being reachable from the runner.
+
+Note the consequence of failing on live builds: the day Blizzard ships a patch, every addon
+that has not been bumped goes red at once, without anyone having changed a line. That is the
+intent - the TOC bump is the work the patch created - but it does mean an unrelated change can
+be blocked by one.
 """
 from __future__ import print_function
 
@@ -168,10 +178,10 @@ def same_line(interfaces, client):
     return [value for value in interfaces if major(value) == major(client["interface"])]
 
 
-def warn(title, message):
-    # ::warning:: turns into an annotation on the run; plain text is enough locally.
+def fail(title, message):
+    # ::error:: turns into a red annotation on the run; plain text is enough locally.
     if os.environ.get("GITHUB_ACTIONS"):
-        print("::warning title=%s::%s" % (title, message))
+        print("::error title=%s::%s" % (title, message))
     else:
         print("  %s" % message)
 
@@ -210,7 +220,7 @@ def report(root, clients):
         for client in behind:
             stale += 1
             mine = ", ".join(str(value) for value in sorted(same_line(interfaces, client), reverse=True))
-            warn("%s is out of date" % os.path.basename(path),
+            fail("%s is out of date" % os.path.basename(path),
                  "%s: %s is on %s and needs %d, but the TOC lists %s for that expansion"
                  % (relative, client["name"], client["version"], client["interface"], mine))
 
@@ -224,7 +234,8 @@ def report(root, clients):
 
     print("\n%d client version%s behind across %d TOC file%s"
           % (stale, "" if stale == 1 else "s", len(files), "" if len(files) == 1 else "s"))
-    return 0
+
+    return 1 if stale else 0
 
 
 SELF_TEST_HTML = """

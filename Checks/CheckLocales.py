@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 """Cross-checks every L["..."] key referenced in an addon's code against its locale files.
 
-Prints one line per locale per missing key (an untranslated string falls back to English in
-game, so these are a translation backlog rather than an error - the exit code is always 0).
-Keys used only by historical migration steps or legacy-only pages may be intentionally
-untranslated.
+Prints one line per locale per missing key, and exits non-zero if there were any: a key the
+code asks for and no locale answers shows the raw English string to that player, which is a
+bug rather than a backlog.
+
+Orphans are reported but do not fail. An orphan is a locale entry nothing references any more,
+left behind when a string was reworded - dead weight, not a defect, and failing on it would
+mean every wording change broke the build until eleven files had been tidied.
 
 Run from the addon's repository root, or point it at one:
 
-    python build/CheckLocales.py
-    python build/CheckLocales.py ../MiniHealthNumbers
+    python build/Checks/CheckLocales.py
+    python build/Checks/CheckLocales.py ../MiniHealthNumbers
 
 Every .lua under src/ is scanned except Libs (third party) and Locales (the translations
 themselves). It deliberately does not enumerate directories: an earlier version listed
@@ -72,6 +75,14 @@ def source_files(src_root):
         for name in sorted(files):
             if name.endswith(".lua"):
                 yield os.path.join(base, name)
+
+
+def fail(title, message):
+    # ::error:: turns into a red annotation on the run; plain text is enough locally.
+    if os.environ.get("GITHUB_ACTIONS"):
+        print("::error title=%s::%s" % (title, message))
+    else:
+        print("  %s" % message)
 
 
 def main(argv):
@@ -160,6 +171,15 @@ def main(argv):
 
     print("\n%d missing entries; %d orphaned in %s; %d keys referenced in code across %d locales"
           % (missing, len(orphans), reference, len(keys), len(locales)))
+
+    # Only the missing entries fail. Orphans are dead weight, not a defect - see the module
+    # docstring for why failing on them would punish the wrong change.
+    if missing:
+        fail("Missing locale entries",
+             "%d string%s referenced in code with no translation behind %s"
+             % (missing, "" if missing == 1 else "s", "it" if missing == 1 else "them"))
+        return 1
+
     return 0
 
 

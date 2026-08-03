@@ -11,34 +11,42 @@ addon's `tests/RunAll.lua` reference them by path, across thirty-odd repositorie
 means editing all of them. Everything under a subfolder is internal and free to rearrange.
 
 ```
-Lint.ps1        Runs the checks that fail a build. Called by every addon's workflow.
+Lint.ps1        Runs the source checks. Called by every addon's workflow.
 Test.ps1        Runs the addon's suite if it has one. Called by every addon's workflow.
 
 Lua/            The test harness an addon's suite requires. On its package.path.
-Checks/         Enforce: these fail the build. Driven by Lint.ps1.
-Reports/        Inform: these never fail. Called directly by the workflow.
+Checks/         Every check. All of them fail the build.
 Release/        Packaging and publishing. Run by hand.
 Setup/          One-time developer machine setup. Run by hand.
 ```
 
-### Checks — fail the build
+### Checks — all of these fail the build
 
-| Script | What it catches |
-| --- | --- |
-| `Linter.lua` | luacheck over `src/` and `tests/`, using the addon's own `.luacheckrc` |
-| `CheckForwardRefs.py` | a file-local Lua function referenced above its declaration, which luacheck can't see because every `.luacheckrc` suppresses undefined globals |
-| `CheckConventions.py` | file layout, module-table naming, and TOC load order |
+Three are driven by `Lint.ps1`; three are separate workflow steps, so a failure names the
+concern rather than lumping everything under "lint failed".
 
-### Reports — never fail
+| Script | Invoked by | What it catches |
+| --- | --- | --- |
+| `Linter.lua` | `Lint.ps1` | luacheck over `src/` and `tests/`, using the addon's own `.luacheckrc` |
+| `CheckForwardRefs.py` | `Lint.ps1` | a file-local Lua function referenced above its declaration, which luacheck can't see because every `.luacheckrc` suppresses undefined globals |
+| `CheckConventions.py` | `Lint.ps1` | file layout, module-table naming, and TOC load order |
+| `CheckSubmodule.ps1` | workflow | the addon's pinned `build` commit is behind this repository |
+| `CheckLocales.py` | workflow | `L["..."]` keys the code asks for with no translation behind them |
+| `CheckTocVersions.py` | workflow | TOC interface numbers behind a **live** client, which greys the addon out |
 
-A translation backlog, a deliberately pinned submodule and a client patch that landed this
-morning are all normal states, not build breakages. These print to the step summary and exit 0.
+Three things are reported without failing, because failing on them would punish the wrong
+change:
 
-| Script | What it reports |
-| --- | --- |
-| `CheckSubmodule.ps1` | the addon's pinned `build` commit is behind this repository |
-| `CheckLocales.py` | `L["..."]` keys missing from a locale file, and orphaned locale entries |
-| `CheckTocVersions.py` | TOC interface numbers behind a live client, which greys the addon out |
+- **Orphaned locale entries** — dead weight left by a reworded string. Failing would mean every
+  wording change broke the build until eleven locale files had been tidied.
+- **Test-realm builds** — an addon is free to wait for a PTR build to go live.
+- **An unreachable wiki page** — whether the build passes must not depend on a third party site
+  being up, so `CheckTocVersions.py` exits 0 with a note when it cannot read the build list.
+
+Two of these fail on their own schedule rather than on yours. The day Blizzard ships a patch,
+every addon not yet bumped fails `CheckTocVersions`; the moment this repository gains a commit,
+every addon still on the old pin fails `CheckSubmodule`. Both are the point — the bump is the
+work that just got created — but it does mean an unrelated change can be blocked by one.
 
 ### Lua — the test harness
 
@@ -63,9 +71,9 @@ From an addon's root:
 ```powershell
 ./build/Lint.ps1
 ./build/Test.ps1
-./build/Reports/CheckSubmodule.ps1
-python ./build/Reports/CheckLocales.py
-python ./build/Reports/CheckTocVersions.py
+./build/Checks/CheckSubmodule.ps1
+python ./build/Checks/CheckLocales.py
+python ./build/Checks/CheckTocVersions.py
 ```
 
 Packaging, from `build/Release` (the zip is written to the working directory, which is where
@@ -86,9 +94,11 @@ Machine setup, once:
 
 1. Commit and push here first. An addon's submodule pointer must reference a published commit
    or CI cannot resolve it.
-2. Bump each addon: `cd <addon>/build && git fetch origin main && git checkout <sha>`, then
-   commit the pointer in the addon.
-3. `Reports/CheckSubmodule.ps1` reports addons still on an older pin.
+2. Bump every addon in the same pass: `cd <addon>/build && git fetch origin main &&
+   git checkout <sha>`, then commit the pointer in the addon. This is not optional any more —
+   `Checks/CheckSubmodule.ps1` fails an addon still on the old pin, and the workflow checks
+   these scripts out at their default branch rather than at the pin, so a path change here
+   breaks every addon that has not been bumped.
 
 Note that `cd build` also switches git context, which silently breaks `git status` and
 `git stash` run from what looks like the parent repository.
