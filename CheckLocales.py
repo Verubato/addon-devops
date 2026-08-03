@@ -64,15 +64,29 @@ def main(argv):
                      if f.endswith(".lua") and f not in NOT_A_LOCALE)
 
     missing = 0
+    defined = {}
     for locale in locales:
         have = {m.group(2) for m in ENTRY.finditer(read(os.path.join(locale_root, locale + ".lua")))}
+        defined[locale] = have
         for key in sorted(keys - have):
             missing += 1
             short = key if len(key) < 80 else key[:77] + "..."
             print("%s: %r" % (locale, short))
 
-    print("\n%d missing entries; %d keys referenced in code across %d locales"
-          % (missing, len(keys), len(locales)))
+    # Strings a locale defines that nothing references any more - dead weight left behind when
+    # the code that used them changed. Reported from the reference locale only; a translation
+    # carrying an extra key the English file also has is not the translator's problem.
+    reference = "enUS" if "enUS" in defined else (locales[0] if locales else None)
+    orphans = sorted(defined.get(reference, set()) - keys) if reference else []
+
+    if orphans:
+        print("\nDefined in %s but never referenced in code:" % reference)
+        for key in orphans:
+            short = key if len(key) < 80 else key[:77] + "..."
+            print("  %r" % short)
+
+    print("\n%d missing entries; %d orphaned in %s; %d keys referenced in code across %d locales"
+          % (missing, len(orphans), reference, len(keys), len(locales)))
     return 0
 
 

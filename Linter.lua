@@ -3,7 +3,10 @@ local lfs = require("lfs")
 -- Forward slashes throughout: Windows accepts them and Linux requires them, so the same script
 -- runs locally and on a CI runner. Paths are resolved from this file rather than the working
 -- directory so it can be invoked from anywhere.
-local scriptDir = (arg and arg[0] or ""):match("^(.*)[/\\][^/\\]+$") or "."
+-- Normalise before splitting: on Windows arg[0] arrives with backslashes, and a mixed-separator
+-- root then fails to strip itself off the reported paths.
+local scriptPath = (arg and arg[0] or ""):gsub("\\", "/")
+local scriptDir = scriptPath:match("^(.*)/[^/]+$") or "."
 local addonRoot = scriptDir .. "/.."
 
 local function collect_lua_files(dir, out)
@@ -43,9 +46,14 @@ end
 local function LuaCheck()
     local luacheck = require("luacheck")
 
+    -- Tests are code too, and were previously unlinted entirely. An addon without a suite just
+    -- contributes nothing here.
     local files = {}
-    local srcDir = addonRoot .. "/src"
-    collect_lua_files(srcDir, files)
+    for _, dir in ipairs({ addonRoot .. "/src", addonRoot .. "/tests" }) do
+        if lfs.attributes(dir, "mode") == "directory" then
+            collect_lua_files(dir, files)
+        end
+    end
 
     local cfg = load_luacheckrc(addonRoot .. "/.luacheckrc")
 
