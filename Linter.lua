@@ -46,16 +46,26 @@ end
 local function LuaCheck()
     local luacheck = require("luacheck")
 
-    -- Tests are code too, and were previously unlinted entirely. An addon without a suite just
-    -- contributes nothing here.
+    local cfg = load_luacheckrc(addonRoot .. "/.luacheckrc")
+
+    -- Tests are code too, and were previously unlinted entirely. An addon whose suite predates
+    -- this can set `lint_tests = false` in its .luacheckrc to opt out until it is cleaned up;
+    -- the key is removed before the config reaches luacheck, which would not recognise it.
+    local lintTests = cfg.lint_tests ~= false
+    cfg.lint_tests = nil
+
     local files = {}
-    for _, dir in ipairs({ addonRoot .. "/src", addonRoot .. "/tests" }) do
+    local dirs = { addonRoot .. "/src" }
+
+    if lintTests then
+        dirs[#dirs + 1] = addonRoot .. "/tests"
+    end
+
+    for _, dir in ipairs(dirs) do
         if lfs.attributes(dir, "mode") == "directory" then
             collect_lua_files(dir, files)
         end
     end
-
-    local cfg = load_luacheckrc(addonRoot .. "/.luacheckrc")
 
     local totalWarnings, totalErrors, totalFatals = 0, 0, 0
 
