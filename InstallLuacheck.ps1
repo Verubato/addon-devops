@@ -1,4 +1,4 @@
-<# install-luacheck.ps1
+<# InstallLuacheck.ps1
 Installs luacheck for Lua 5.1 x86 using Chocolatey LuaRocks (win32) + MSVC x86 + WinSDK.
 Does NOT rely on luarocks "run" or "path" commands (since your loaded core lacks them).
 

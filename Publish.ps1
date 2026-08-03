@@ -1,5 +1,5 @@
 <#
-publish.ps1
+Publish.ps1
 
 Zero-configuration CurseForge + GitHub publisher.
 

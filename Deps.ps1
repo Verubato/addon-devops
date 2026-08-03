@@ -10,7 +10,7 @@ choco install lua -y
 choco install luarocks -y
 
 # install luacheck
-./install-luacheck.ps1 -PersistLuacheckPath User
+./InstallLuacheck.ps1 -PersistLuacheckPath User
 
 # refresh the path env variable
 $env:Path = ([System.Environment]::GetEnvironmentVariable("Path","Machine"),
