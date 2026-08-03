@@ -68,12 +68,50 @@ def lua_files(root):
     return sorted(found)
 
 
-def toc_entries(toc_path):
-    entries = []
+XML_REF = re.compile(r"""<(?:Script|Include)\s+file\s*=\s*["']([^"']+)["']""", re.I)
+
+
+def _expand(rel, src_root, entries, seen):
+    """Appends rel, following an .xml through its Script/Include references in document order."""
+    key = rel.lower()
+    if key in seen:
+        return
+    seen.add(key)
+
+    if rel.lower().endswith(".lua"):
+        entries.append(rel)
+        return
+
+    if not rel.lower().endswith(".xml"):
+        return
+
+    full = os.path.join(src_root, rel)
+    if not os.path.exists(full):
+        return
+
+    # Referenced paths are relative to the directory the xml itself lives in.
+    base = os.path.dirname(rel)
+    for ref in XML_REF.findall(read(full)):
+        ref = ref.replace("\\", "/")
+        child = "%s/%s" % (base, ref) if base else ref
+        _expand(os.path.normpath(child).replace("\\", "/"), src_root, entries, seen)
+
+
+def toc_entries(toc_path, src_root):
+    """The addon's files in load order.
+
+    A TOC may name .xml files that in turn pull in the real Lua (FrameSort loads eighty files
+    that way, and MiniCC loads its libraries the same way), so those are followed rather than
+    treated as the end of the list - otherwise every file behind an xml looks unloaded.
+    """
+    entries, seen = [], set()
     for line in read(toc_path).splitlines():
         line = line.strip()
-        if line.endswith(".lua") and not line.startswith("#"):
-            entries.append(line.replace("\\", "/"))
+        if line.startswith("#") or not line:
+            continue
+        lowered = line.lower()
+        if lowered.endswith(".lua") or lowered.endswith(".xml"):
+            _expand(line.replace("\\", "/"), src_root, entries, seen)
     return entries
 
 
@@ -83,7 +121,7 @@ def body_after_docs(source):
 
 
 def check_tree(src_root, toc_path, problems):
-    listed = toc_entries(toc_path)
+    listed = toc_entries(toc_path, src_root)
     on_disk = set(lua_files(src_root))
     listed_set = set(listed)
 
