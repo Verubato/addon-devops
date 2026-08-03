@@ -1,8 +1,24 @@
-# Ask luarocks what paths Lua needs
+# Ask luarocks what paths Lua needs. It prints shell-specific assignments: "set X=..." on
+# Windows and "export X='...'" on POSIX, so both forms are accepted.
 $lrPaths = luarocks path --lua-version 5.1
-# Emit as lines like: set LUA_PATH=... and set LUA_CPATH=...
-$env:LUA_PATH  = ($lrPaths | Select-String '^set LUA_PATH=').Line -replace '^set LUA_PATH=',''
-$env:LUA_CPATH = ($lrPaths | Select-String '^set LUA_CPATH=').Line -replace '^set LUA_CPATH=',''
+
+function Get-LuaRocksPath([string] $name) {
+    $match = $lrPaths | Select-String "^(?:set|export)\s+$name=(.*)$"
+
+    if (-not $match) {
+        return $null
+    }
+
+    return $match.Matches[0].Groups[1].Value.Trim().TrimEnd(';').Trim("'").Trim('"')
+}
+
+# Only assign when a value was actually parsed. Assigning an empty string wipes Lua's built-in
+# search path, which hid a correctly installed rock and reported it as "module 'lfs' not found".
+$luaPath = Get-LuaRocksPath 'LUA_PATH'
+$luaCPath = Get-LuaRocksPath 'LUA_CPATH'
+
+if ($luaPath) { $env:LUA_PATH = $luaPath }
+if ($luaCPath) { $env:LUA_CPATH = $luaCPath }
 
 lua "$PSScriptRoot/Linter.lua"
 $luacheckFailed = $LASTEXITCODE -ne 0
