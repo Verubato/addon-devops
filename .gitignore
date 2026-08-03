@@ -1,1 +1,4 @@
 *.zip
+# Python leaves these behind whenever a tool imports one of the checkers rather than
+# running it as a script.
+__pycache__/
