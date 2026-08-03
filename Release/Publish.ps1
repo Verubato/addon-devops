@@ -4,10 +4,10 @@ Publish.ps1
 Zero-configuration CurseForge + GitHub publisher.
 
 Assumptions:
-- Script lives in build/
-- changelog.md lives in the parent directory
+- Script lives in build/Release/
+- changelog.md lives in the addon root, two levels up
     - The first "## <version>" heading is the latest release and must match the TOC version
-- Exactly one .toc exists in ../src/
+- Exactly one .toc exists in ../../src/
 - TOC contains:
     ## X-Curse-Project-ID: <id>
     ## Version: <version>
@@ -46,7 +46,8 @@ $ErrorActionPreference = "Stop"
 # ---------------- Discovery ----------------
 
 function Find-TocFile {
-    $srcDir = Join-Path $PSScriptRoot "..\src" | Resolve-Path -ErrorAction Stop
+    # Two levels up: this script sits in <addon>/build/Release/.
+    $srcDir = Join-Path $PSScriptRoot "..\..\src" | Resolve-Path -ErrorAction Stop
     $srcDirPath = $srcDir.Path
 
     $tocs = @(Get-ChildItem -LiteralPath $srcDirPath -Filter *.toc -File -ErrorAction Stop)
@@ -80,8 +81,8 @@ function Find-ZipForVersion {
 }
 
 function Get-Changelog {
-    # Parent directory of the script (e.g. repo root)
-    $parentDir = Resolve-Path (Join-Path $PSScriptRoot "..")
+    # The addon root, two levels up from build/Release/
+    $parentDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 
     $path = Join-Path $parentDir "changelog.md"
 
@@ -418,7 +419,7 @@ function Invoke-GitCommand {
 }
 
 function Get-GitHubRepoInfo {
-    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
     $r = Invoke-GitCommand -RepoPath $repoRoot -GitArgs @("remote", "get-url", "origin")
     if ($r.ExitCode -ne 0) {

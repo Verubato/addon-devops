@@ -1,7 +1,12 @@
 $ErrorActionPreference = "Stop"
 
+# The addon's sources, two levels up from build/Release/. Resolved against this file rather
+# than the working directory so the script can be run from anywhere; the zip it produces stays
+# in the working directory, which is where Publish.ps1 looks for it.
+$srcDir = Join-Path $PSScriptRoot "..\..\src"
+
 # locate the toc file in src (@() so .Count works under a caller's strict mode)
-$tocFiles = @(Get-ChildItem -Path "..\src" -Filter "*.toc" -File)
+$tocFiles = @(Get-ChildItem -Path $srcDir -Filter "*.toc" -File)
 
 if ($tocFiles.Count -eq 0) {
     Write-Error "No .toc file found in src"
@@ -21,7 +26,7 @@ Remove-Item -Recurse -Force $addonFolderName -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $addonFolderName | Out-Null
 
 # copy the addon files
-Copy-Item "..\src\*" $addonFolderName -Recurse -Force
+Copy-Item (Join-Path $srcDir "*") $addonFolderName -Recurse -Force
 
 # extract the version number from the toc
 $regex = Get-Content (Join-Path $addonFolderName $tocFiles[0].Name) |

@@ -10,7 +10,8 @@ choco install lua -y
 choco install luarocks -y
 
 # install luacheck
-./InstallLuacheck.ps1 -PersistLuacheckPath User
+# Resolved against this file, not the working directory, so the script runs from anywhere.
+& (Join-Path $PSScriptRoot "InstallLuacheck.ps1") -PersistLuacheckPath User
 
 # refresh the path env variable
 $env:Path = ([System.Environment]::GetEnvironmentVariable("Path","Machine"),

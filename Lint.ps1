@@ -20,20 +20,24 @@ $luaCPath = Get-LuaRocksPath 'LUA_CPATH'
 if ($luaPath) { $env:LUA_PATH = $luaPath }
 if ($luaCPath) { $env:LUA_CPATH = $luaCPath }
 
-lua "$PSScriptRoot/Linter.lua"
+# The checkers themselves live under Checks/. This file stays at the repository root because
+# every addon's workflow calls it by path, and that path is a contract across 30-odd repos.
+$addonRoot = Join-Path $PSScriptRoot ".."
+
+lua "$PSScriptRoot/Checks/Linter.lua"
 $luacheckFailed = $LASTEXITCODE -ne 0
 
 # Lua binds names inside a function body at compile time, so a local function referenced above
 # its own declaration silently becomes a nil global read. Luacheck can't see it - every addon's
 # .luacheckrc suppresses undefined globals, because addons legitimately read WoW globals - and it
 # only errors on the code path that hits it, which the tests may never reach.
-python "$PSScriptRoot/CheckForwardRefs.py"
+python "$PSScriptRoot/Checks/CheckForwardRefs.py" (Join-Path $addonRoot "src")
 $forwardRefsFailed = $LASTEXITCODE -ne 0
 
 # File layout, module-table naming and TOC load order. Load order is the one luacheck and the
 # test suites both miss: a test harness loads files in its own order, so a file that reads
 # addon.Core.X before the TOC loads X passes everything and only fails in game.
-python "$PSScriptRoot/CheckConventions.py" (Join-Path $PSScriptRoot "..")
+python "$PSScriptRoot/Checks/CheckConventions.py" $addonRoot
 $conventionsFailed = $LASTEXITCODE -ne 0
 
 if ($luacheckFailed -or $forwardRefsFailed -or $conventionsFailed) {

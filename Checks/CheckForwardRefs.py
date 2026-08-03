@@ -3,8 +3,8 @@
 Run:        python CheckForwardRefs.py [path ...]
 Self-test:  python CheckForwardRefs.py --self-test
 
-With no path it scans `../src` relative to this file - i.e. the addon that mounts this repo as
-its `build` submodule. Pass paths explicitly to scan anywhere else.
+With no path it scans `../../src` relative to this file - i.e. the addon that mounts this repo
+as its `build` submodule. Pass paths explicitly to scan anywhere else.
 
 In Lua a name inside a function body binds at COMPILE time. If `local function Foo` appears
 later in the file than a body that mentions `Foo`, that body compiled `Foo` as a GLOBAL read,
@@ -33,7 +33,9 @@ SINGLE_LINE_RE = re.compile(r"\bend\s*$")
 REFERENCE_RE = re.compile(r"""(?<![\w.:])([A-Za-z_]\w*)\s*(?!=[^=])(?![\w=])""")
 
 # This repo is mounted as an addon's `build` submodule, so the addon's sources sit alongside it.
-DEFAULT_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+# Three levels up from <addon>/build/Checks/CheckForwardRefs.py lands on the addon root.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_SRC = os.path.join(_REPO_ROOT, "src")
 
 
 def strip_noise(line):

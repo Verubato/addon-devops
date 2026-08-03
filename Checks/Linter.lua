@@ -7,7 +7,8 @@ local lfs = require("lfs")
 -- root then fails to strip itself off the reported paths.
 local scriptPath = (arg and arg[0] or ""):gsub("\\", "/")
 local scriptDir = scriptPath:match("^(.*)/[^/]+$") or "."
-local addonRoot = scriptDir .. "/.."
+-- Two levels up: this file sits in <addon>/build/Checks/.
+local addonRoot = scriptDir .. "/../.."
 
 local function collect_lua_files(dir, out)
     for entry in lfs.dir(dir) do

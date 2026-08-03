@@ -5,7 +5,8 @@
 # hand. This reports, it never fails - an addon pinned deliberately to an older commit is a
 # legitimate choice, and a stale pin is not a reason to block a build.
 
-$addonRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+# Two levels up: this script sits in <addon>/build/Reports/.
+$addonRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 
 # The commit the addon's index records for the build path.
 $entry = git -C $addonRoot ls-files -s build 2>$null | Select-Object -First 1
