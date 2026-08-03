@@ -24,7 +24,23 @@ import re
 import sys
 
 KEY = re.compile(r"""L\[(["'])((?:[^\\\n]|\\.)*?)\1\]""")
-ENTRY = re.compile(r"""^\t\[(["'])((?:[^\\\n]|\\.)*?)\1\]\s*=""", re.M)
+
+# Addons write their locale tables one of two ways, so both have to be recognised:
+#
+#   MiniCC     L:SetDefaultStrings({        FrameSort    L["Role"] = "Rolle"
+#                  ["Role"] = "Rolle",
+#              })
+#
+# Matching only the indented table form reported every key of every flat-form locale as
+# missing - FrameSort came out at 1377 missing and 0 orphaned, which is the giveaway: a file
+# whose entries all parse cannot have zero of them referenced.
+ENTRY = re.compile(
+    r"""^[ \t]*(?:L\s*)?\[(["'])((?:[^\\\n]|\\.)*?)\1\]\s*=[ \t]*(.*)$""", re.M)
+
+# In the flat form the reference locale writes `L["Role"] = nil`, because the key already is
+# the English string. That is a declared key, not a gap. In a translated locale the same line
+# means nobody has translated it yet, so it counts as missing there.
+NIL_VALUE = re.compile(r"^nil\b")
 
 SKIP_DIRS = ("Libs", "Locales")
 # The locale loader, not a translation table.
@@ -63,12 +79,28 @@ def main(argv):
     locales = sorted(f[:-4] for f in os.listdir(locale_root)
                      if f.endswith(".lua") and f not in NOT_A_LOCALE)
 
-    missing = 0
+    # Parse every locale up front: whether a nil value counts as a gap depends on which locale
+    # turns out to be the reference, and that is not known until they have all been listed.
     defined = {}
+    untranslated = {}
     for locale in locales:
-        have = {m.group(2) for m in ENTRY.finditer(read(os.path.join(locale_root, locale + ".lua")))}
+        have, nils = set(), set()
+        for match in ENTRY.finditer(read(os.path.join(locale_root, locale + ".lua"))):
+            key, value = match.group(2), match.group(3).strip()
+            have.add(key)
+            if NIL_VALUE.match(value):
+                nils.add(key)
         defined[locale] = have
-        for key in sorted(keys - have):
+        untranslated[locale] = nils
+
+    reference = "enUS" if "enUS" in defined else (locales[0] if locales else None)
+
+    missing = 0
+    for locale in locales:
+        gaps = keys - defined[locale]
+        if locale != reference:
+            gaps |= untranslated[locale] & keys
+        for key in sorted(gaps):
             missing += 1
             short = key if len(key) < 80 else key[:77] + "..."
             print("%s: %r" % (locale, short))
@@ -76,7 +108,6 @@ def main(argv):
     # Strings a locale defines that nothing references any more - dead weight left behind when
     # the code that used them changed. Reported from the reference locale only; a translation
     # carrying an extra key the English file also has is not the translator's problem.
-    reference = "enUS" if "enUS" in defined else (locales[0] if locales else None)
     orphans = sorted(defined.get(reference, set()) - keys) if reference else []
 
     if orphans:
