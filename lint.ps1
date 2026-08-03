@@ -14,6 +14,16 @@ $luacheckFailed = $LASTEXITCODE -ne 0
 python "$PSScriptRoot/CheckForwardRefs.py"
 $forwardRefsFailed = $LASTEXITCODE -ne 0
 
-if ($luacheckFailed -or $forwardRefsFailed) {
+# Optional per-addon conventions checker. Addons that do not ship one are unaffected.
+$conventions = Join-Path $PSScriptRoot "../scripts/CheckConventions.py"
+$conventionsFailed = $false
+if (Test-Path $conventions) {
+    Push-Location (Join-Path $PSScriptRoot "..")
+    python $conventions
+    $conventionsFailed = $LASTEXITCODE -ne 0
+    Pop-Location
+}
+
+if ($luacheckFailed -or $forwardRefsFailed -or $conventionsFailed) {
     exit 1
 }
