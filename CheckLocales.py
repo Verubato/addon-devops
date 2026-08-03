@@ -42,6 +42,21 @@ ENTRY = re.compile(
 # means nobody has translated it yet, so it counts as missing there.
 NIL_VALUE = re.compile(r"^nil\b")
 
+# Not every lookup spells its key out. Both of these are real FrameSort call sites:
+#
+#   L["Arena - " .. otherArenaSizes]        -- prefix, completed at runtime
+#   L[title]                                -- whole key held in a variable
+#
+# A literal-only scan sees neither, so the keys they reach look unreferenced and get reported
+# as orphans - which is how "Arena - 3v3", "Arena - 3v3 & 5v5" and "Raid" came within one
+# commit of being deleted as dead weight while still being displayed in the options panel.
+CONCAT_KEY = re.compile(r"""L\[(["'])((?:[^\\\n]|\\.)*?)\1\s*\.\.""")
+VARIABLE_KEY = re.compile(r"""L\[\s*([A-Za-z_][A-Za-z_0-9.]*)\s*\]""")
+# Quoted literals on the right of `name = ...`, to resolve the variable form. Deliberately
+# shallow: it recovers `local title = cond and "Raid" or "Group"` without pretending to be a
+# Lua interpreter, and over-reporting a key as referenced only ever loses an orphan warning.
+STRINGS = re.compile(r"""(["'])((?:[^\\\n]|\\.)*?)\1""")
+
 SKIP_DIRS = ("Libs", "Locales")
 # The locale loader, not a translation table.
 NOT_A_LOCALE = ("Locale.lua",)
@@ -72,9 +87,23 @@ def main(argv):
         return 0
 
     keys = set()
+    prefixes = set()
+    # Keys a lookup builds at runtime. Kept apart from `keys` because a key that is only ever
+    # constructed cannot be checked for translation - there is no literal to compare against -
+    # but it must still not be reported as an orphan.
+    constructed = set()
     for path in source_files(src_root):
-        for match in KEY.finditer(read(path)):
+        text = read(path)
+        for match in KEY.finditer(text):
             keys.add(match.group(2))
+        for match in CONCAT_KEY.finditer(text):
+            prefixes.add(match.group(2))
+        for match in VARIABLE_KEY.finditer(text):
+            name = match.group(1)
+            assigned = re.compile(r"""\b%s\s*=([^\n]*)""" % re.escape(name))
+            for line in assigned.findall(text):
+                for literal in STRINGS.finditer(line):
+                    constructed.add(literal.group(2))
 
     locales = sorted(f[:-4] for f in os.listdir(locale_root)
                      if f.endswith(".lua") and f not in NOT_A_LOCALE)
@@ -108,11 +137,24 @@ def main(argv):
     # Strings a locale defines that nothing references any more - dead weight left behind when
     # the code that used them changed. Reported from the reference locale only; a translation
     # carrying an extra key the English file also has is not the translator's problem.
-    orphans = sorted(defined.get(reference, set()) - keys) if reference else []
+    # A key a lookup builds at runtime is referenced even though no literal spells it out, so
+    # those are held back rather than reported as dead.
+    def built_at_runtime(key):
+        return key in constructed or any(key.startswith(p) for p in prefixes)
+
+    unreferenced = defined.get(reference, set()) - keys if reference else set()
+    orphans = sorted(k for k in unreferenced if not built_at_runtime(k))
+    dynamic = sorted(k for k in unreferenced if built_at_runtime(k))
 
     if orphans:
         print("\nDefined in %s but never referenced in code:" % reference)
         for key in orphans:
+            short = key if len(key) < 80 else key[:77] + "..."
+            print("  %r" % short)
+
+    if dynamic:
+        print("\nReached only through a runtime-built key, so not checked for translation:")
+        for key in dynamic:
             short = key if len(key) < 80 else key[:77] + "..."
             print("  %r" % short)
 
