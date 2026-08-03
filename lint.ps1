@@ -14,15 +14,11 @@ $luacheckFailed = $LASTEXITCODE -ne 0
 python "$PSScriptRoot/CheckForwardRefs.py"
 $forwardRefsFailed = $LASTEXITCODE -ne 0
 
-# Optional per-addon conventions checker. Addons that do not ship one are unaffected.
-$conventions = Join-Path $PSScriptRoot "../scripts/CheckConventions.py"
-$conventionsFailed = $false
-if (Test-Path $conventions) {
-    Push-Location (Join-Path $PSScriptRoot "..")
-    python $conventions
-    $conventionsFailed = $LASTEXITCODE -ne 0
-    Pop-Location
-}
+# File layout, module-table naming and TOC load order. Load order is the one luacheck and the
+# test suites both miss: a test harness loads files in its own order, so a file that reads
+# addon.Core.X before the TOC loads X passes everything and only fails in game.
+python "$PSScriptRoot/CheckConventions.py" (Join-Path $PSScriptRoot "..")
+$conventionsFailed = $LASTEXITCODE -ne 0
 
 if ($luacheckFailed -or $forwardRefsFailed -or $conventionsFailed) {
     exit 1
