@@ -1,16 +1,22 @@
 local lfs = require("lfs")
 
+-- Forward slashes throughout: Windows accepts them and Linux requires them, so the same script
+-- runs locally and on a CI runner. Paths are resolved from this file rather than the working
+-- directory so it can be invoked from anywhere.
+local scriptDir = (arg and arg[0] or ""):match("^(.*)[/\\][^/\\]+$") or "."
+local addonRoot = scriptDir .. "/.."
+
 local function collect_lua_files(dir, out)
     for entry in lfs.dir(dir) do
         if entry ~= "." and entry ~= ".." then
-            local path = dir .. "\\" .. entry
+            local path = dir .. "/" .. entry
             local attr = lfs.attributes(path)
             if attr then
                 if attr.mode == "directory" then
                     collect_lua_files(path, out)
                 elseif attr.mode == "file" and entry:match("%.lua$") then
                     -- skip vendored libs
-                    if not path:match("\\Libs\\") then
+                    if not path:match("/Libs/") then
                         out[#out + 1] = path
                     end
                 end
@@ -38,10 +44,10 @@ local function LuaCheck()
     local luacheck = require("luacheck")
 
     local files = {}
-    local srcDir = "..\\src"
+    local srcDir = addonRoot .. "/src"
     collect_lua_files(srcDir, files)
 
-    local cfg = load_luacheckrc("..\\.luacheckrc")
+    local cfg = load_luacheckrc(addonRoot .. "/.luacheckrc")
 
     local totalWarnings, totalErrors, totalFatals = 0, 0, 0
 
@@ -56,8 +62,8 @@ local function LuaCheck()
     end
 
     for _, realPath in ipairs(files) do
-        local logical = realPath:gsub("\\", "/") -- ../src/WoW/WoW.lua
-        logical = logical:gsub("^%.%./", "") -- src/WoW/WoW.lua
+        -- Report paths as src/WoW/WoW.lua rather than the absolute path we walked.
+        local logical = realPath:gsub("\\", "/"):gsub("^" .. addonRoot:gsub("([^%w])", "%%%1") .. "/", "")
 
         local content, err = read_all(realPath)
         if not content then

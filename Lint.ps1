@@ -4,7 +4,7 @@ $lrPaths = luarocks path --lua-version 5.1
 $env:LUA_PATH  = ($lrPaths | Select-String '^set LUA_PATH=').Line -replace '^set LUA_PATH=',''
 $env:LUA_CPATH = ($lrPaths | Select-String '^set LUA_CPATH=').Line -replace '^set LUA_CPATH=',''
 
-lua Linter.lua
+lua "$PSScriptRoot/Linter.lua"
 $luacheckFailed = $LASTEXITCODE -ne 0
 
 # Lua binds names inside a function body at compile time, so a local function referenced above
