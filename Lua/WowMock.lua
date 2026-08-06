@@ -1127,6 +1127,15 @@ end
 function widget:SetAuraGroupLayout() end
 function widget:SetAuraGroupMaxFrameCount() end
 function widget:SetAuraGroupSortMethod() end
+
+function widget:SetAuraGroupFilterString(key, filterString)
+	local group = self.__auraGroups and self.__auraGroups[key]
+
+	if group then
+		group.Filter = filterString
+	end
+end
+
 function widget:SetAuraGroupCandidateFilters() end
 function widget:SetCandidateFilters() end
 function widget:SetUseEditModeSource() end
