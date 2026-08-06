@@ -28,6 +28,20 @@ New-Item -ItemType Directory $addonFolderName | Out-Null
 # copy the addon files
 Copy-Item (Join-Path $srcDir "*") $addonFolderName -Recurse -Force
 
+# Extra addon folders shipped in the same zip, one per directory under compat/. Used for stubs
+# that keep an old saved-variables file loading after an addon is renamed. Repos without a
+# compat/ directory are unaffected.
+$compatDir = Join-Path $PSScriptRoot "..\..\compat"
+$zipFolders = @($addonFolderName)
+
+if (Test-Path $compatDir) {
+    foreach ($folder in @(Get-ChildItem -Path $compatDir -Directory)) {
+        Remove-Item -Recurse -Force $folder.Name -ErrorAction SilentlyContinue
+        Copy-Item $folder.FullName . -Recurse -Force
+        $zipFolders += $folder.Name
+    }
+}
+
 # extract the version number from the toc
 $regex = Get-Content (Join-Path $addonFolderName $tocFiles[0].Name) |
     Select-String "(?<=Version:\s*).*"
@@ -43,7 +57,9 @@ $zipFileName = "$version.zip"
 Remove-Item $zipFileName -ErrorAction SilentlyContinue
 
 # create the zip file
-Compress-Archive -Path $addonFolderName -DestinationPath $zipFileName
+Compress-Archive -Path $zipFolders -DestinationPath $zipFileName
 
-# remove the temp folder
-Remove-Item -Recurse -Force $addonFolderName
+# remove the temp folders
+foreach ($folder in $zipFolders) {
+    Remove-Item -Recurse -Force $folder
+}
