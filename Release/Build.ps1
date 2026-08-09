@@ -35,10 +35,28 @@ $compatDir = Join-Path $PSScriptRoot "..\..\compat"
 $zipFolders = @($addonFolderName)
 
 if (Test-Path $compatDir) {
+    # Release tooling only ever bumps the main toc, and a stub whose Interface lags gets
+    # greyed out as out of date, which silently defeats the saved-variables bridge it exists
+    # to be. Stamp the shipped copies with the main toc's Interface and Version so they can
+    # never fall behind. ReadAllText/WriteAllText because PS 5.1 Get-Content decodes BOM-less
+    # files as ANSI.
+    # Resolve-Path because .NET resolves relative paths against the process working directory,
+    # which PowerShell's Set-Location does not move.
+    $mainToc = [System.IO.File]::ReadAllText((Resolve-Path (Join-Path $addonFolderName $tocFiles[0].Name)).Path)
+    $interfaceLine = [regex]::Match($mainToc, "(?m)^## Interface:.*$").Value
+    $versionLine = [regex]::Match($mainToc, "(?m)^## Version:.*$").Value
+
     foreach ($folder in @(Get-ChildItem -Path $compatDir -Directory)) {
         Remove-Item -Recurse -Force $folder.Name -ErrorAction SilentlyContinue
         Copy-Item $folder.FullName . -Recurse -Force
         $zipFolders += $folder.Name
+
+        foreach ($stubToc in @(Get-ChildItem -Path $folder.Name -Filter "*.toc" -File)) {
+            $text = [System.IO.File]::ReadAllText($stubToc.FullName)
+            if ($interfaceLine) { $text = [regex]::Replace($text, "(?m)^## Interface:.*$", $interfaceLine) }
+            if ($versionLine) { $text = [regex]::Replace($text, "(?m)^## Version:.*$", $versionLine) }
+            [System.IO.File]::WriteAllText($stubToc.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
+        }
     }
 }
 

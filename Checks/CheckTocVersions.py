@@ -187,8 +187,16 @@ def fail(title, message):
 
 
 def report(root, clients):
+    # compat/ ships extra addon folders (saved-variable bridges) in the same zip, and a bridge
+    # with a stale Interface silently stops loading the settings it exists to carry.
     src_root = os.path.join(root, "src")
-    scan_root = src_root if os.path.isdir(src_root) else root
+    compat_root = os.path.join(root, "compat")
+    if os.path.isdir(src_root):
+        scan_roots = [src_root]
+        if os.path.isdir(compat_root):
+            scan_roots.append(compat_root)
+    else:
+        scan_roots = [root]
 
     print("Live client builds (%s):" % WIKI_PAGE)
     for client in clients:
@@ -197,10 +205,10 @@ def report(root, clients):
                   % (client["name"], client["expansion"], client["version"],
                      client["interface"], client["build"], client["date"]))
 
-    files = list(toc_files(scan_root))
+    files = [path for scan_root in scan_roots for path in toc_files(scan_root)]
 
     if not files:
-        print("\nno .toc under %s - nothing to check" % os.path.abspath(scan_root))
+        print("\nno .toc under %s - nothing to check" % os.path.abspath(scan_roots[0]))
         return 0
 
     stale = 0
