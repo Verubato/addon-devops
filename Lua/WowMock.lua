@@ -777,6 +777,10 @@ function widget:GetLineCount()
 	return 1
 end
 
+function widget:GetNumLines()
+	return 1
+end
+
 function widget:SetJustifyH() end
 function widget:SetJustifyV() end
 function widget:SetWordWrap() end
