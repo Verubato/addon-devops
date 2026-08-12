@@ -1335,6 +1335,8 @@ local function installState()
 		InstanceType = "none",
 		InCombat = false,
 		InGroup = false,
+		-- A vehicle has the player, which changes what the client says about that unit.
+		InVehicle = false,
 		InRaid = false,
 		GroupMembers = 0,
 		-- Which unit tokens UnitExists answers true for. Only the player by default: a stub
@@ -2211,6 +2213,11 @@ function M.Install(options)
 
 	_G.IsInGroup = function()
 		return State.InGroup
+	end
+
+	-- A vehicle takes over the player unit; only the player is modelled as being in one.
+	_G.UnitHasVehicleUI = function(unit)
+		return unit == "player" and State.InVehicle == true
 	end
 
 	_G.IsInRaid = function()
