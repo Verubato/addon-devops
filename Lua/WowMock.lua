@@ -2050,6 +2050,22 @@ function M.Install(options)
 		return newWidget("Font", name, nil)
 	end
 
+	-- A font family created with its member definitions in the call, the way declared fonts are
+	-- registered. GetFont answers with the first member, which callers build as the one carrying
+	-- the family's own file.
+	_G.CreateFontFamily = function(name, members)
+		local family = newWidget("Font", name, nil)
+		local first = members and members[1]
+
+		family.__members = members
+
+		if first then
+			family:SetFont(first.file, first.height, first.flags)
+		end
+
+		return family
+	end
+
 	_G.PixelUtil = {
 		SetWidth = function(region, width)
 			region:SetWidth(width)
