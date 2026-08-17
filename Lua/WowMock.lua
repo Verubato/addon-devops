@@ -732,18 +732,27 @@ function widget:GetText()
 	return self.__text or ""
 end
 
+-- SetFont and SetFontObject displace each other the way they do in the client: whichever was
+-- called last decides what GetFont answers, and an attached font object is read through live,
+-- so a change to the object shows on every string attached to it.
 function widget:SetFont(font, size, flags)
 	self.__font = { font, size, flags }
+	self.__fontObject = nil
 	return true
 end
 
 function widget:GetFont()
+	if self.__fontObject then
+		return self.__fontObject:GetFont()
+	end
+
 	local font = self.__font or { "Fonts\\FRIZQT__.TTF", 12, "" }
 	return font[1], font[2], font[3]
 end
 
 function widget:SetFontObject(fontObject)
 	self.__fontObject = fontObject
+	self.__font = nil
 end
 
 function widget:GetFontObject()
@@ -2033,6 +2042,12 @@ function M.Install(options)
 		local font = newWidget("Font", name, nil)
 
 		font:SetFont("Fonts\\FRIZQT__.TTF", size, "")
+	end
+
+	-- Addon-created font objects, as the client hands them out: a Font widget registered under a
+	-- unique global name, ready for SetFont and to be attached with SetFontObject.
+	_G.CreateFont = function(name)
+		return newWidget("Font", name, nil)
 	end
 
 	_G.PixelUtil = {
