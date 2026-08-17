@@ -2467,6 +2467,12 @@ function M.Install(options)
 		return false
 	end
 
+	-- "worldboss", "rareelite", "elite", "rare", "normal", "trivial" or "minus". Everything the
+	-- mock spawns is an ordinary unit unless a test says otherwise.
+	_G.UnitClassification = function(unit)
+		return unitExists(unit) and "normal" or nil
+	end
+
 	_G.UnitIsMinion = function()
 		return false
 	end
