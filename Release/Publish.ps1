@@ -1,7 +1,7 @@
 <#
 Publish.ps1
 
-Zero-configuration CurseForge + GitHub publisher.
+Zero-configuration CurseForge + Wago + GitHub publisher.
 
 Assumptions:
 - Script lives in build/Release/
@@ -10,6 +10,7 @@ Assumptions:
 - Exactly one .toc exists in ../../src/
 - TOC contains:
     ## X-Curse-Project-ID: <id>
+    ## X-Wago-ID: <id>            (only when publishing to Wago)
     ## Version: <version>
     ## Interface: <interface list>
 - Zip file exists in current working directory and is named:
@@ -24,6 +25,9 @@ Auth:
 - Upload API (for uploading zip): uses CurseForge Upload API
     - Header: X-Api-Token
     - Token from CF_UPLOAD_TOKEN env var
+- Wago upload: token from WAGO_API_TOKEN env var
+    - Header: Authorization: Bearer <token>
+    - Key from https://addons.wago.io/account/apikeys
 - GitHub release: token from GITHUB_TOKEN (or GH_TOKEN) env var
     - Needs "repo" scope (classic) or "Contents: read and write" (fine-grained)
 #>
@@ -37,7 +41,11 @@ param(
     [string]$ReleaseType = "release",
 
     [switch]$SkipCurseForge,
-    [switch]$SkipGitHub
+    [switch]$SkipWago,
+    [switch]$SkipGitHub,
+
+    # Runs every check and lookup but sends nothing that creates a release.
+    [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
@@ -196,6 +204,18 @@ function Get-TocCurseProjectId {
     return $id
 }
 
+function Get-TocWagoProjectId {
+    param([Parameter(Mandatory)][string]$TocPath)
+
+    $raw = Get-TocLineValue -TocPath $TocPath -Key "X-Wago-ID"
+
+    if ($raw -notmatch '^[A-Za-z0-9]+$') {
+        throw ("Invalid X-Wago-ID '{0}' in TOC ({1})" -f $raw, $TocPath)
+    }
+
+    return $raw
+}
+
 function Get-TocInterfaceNumbers {
     param([Parameter(Mandatory)][string]$TocPath)
 
@@ -217,6 +237,55 @@ function Get-TocInterfaceNumbers {
     }
 
     return $unique.ToArray()
+}
+
+# ---------------- Multipart ----------------
+
+function New-MultipartFormBody {
+    param(
+        [Parameter(Mandatory)][string]$Boundary,
+        [Parameter(Mandatory)][string]$MetadataJson,
+        [Parameter(Mandatory)][string]$ZipPath,
+
+        # CurseForge wants the metadata part typed, Wago's parser matches curl's -F, which
+        # sends a string field with no content type at all.
+        [string]$MetadataContentType
+    )
+
+    if (!(Test-Path -LiteralPath $ZipPath)) {
+        throw ("Zip not found: {0}" -f $ZipPath)
+    }
+
+    $fileName = [IO.Path]::GetFileName($ZipPath)
+
+    # UTF8 WITHOUT BOM: a BOM before the boundary breaks multipart parsing
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $ms = New-Object IO.MemoryStream
+    $writer = New-Object IO.StreamWriter($ms, $utf8NoBom)
+
+    $writer.Write("--$Boundary`r`n")
+    $writer.Write("Content-Disposition: form-data; name=`"metadata`"`r`n")
+    if ($MetadataContentType) {
+        $writer.Write("Content-Type: $MetadataContentType`r`n")
+    }
+    $writer.Write("`r`n")
+    $writer.Write($MetadataJson)
+    $writer.Write("`r`n")
+
+    $writer.Write("--$Boundary`r`n")
+    $writer.Write(("Content-Disposition: form-data; name=`"file`"; filename=`"{0}`"`r`n" -f $fileName))
+    $writer.Write("Content-Type: application/zip`r`n`r`n")
+    $writer.Flush()
+
+    $bytes = [IO.File]::ReadAllBytes($ZipPath)
+    $ms.Write($bytes, 0, $bytes.Length) | Out-Null
+
+    $writer.Write("`r`n--$Boundary--`r`n")
+    $writer.Flush()
+
+    # The comma matters: a returned array is unrolled into Object[], and Invoke-RestMethod
+    # sends anything that is not byte[] as text, which UTF-8 expands the zip and corrupts it.
+    return , $ms.ToArray()
 }
 
 # ---------------- CurseForge Helpers (Read API) ----------------
@@ -332,12 +401,7 @@ function Publish-CurseForgeZip {
         [Parameter()][string]$ChangelogFormat
     )
 
-    if (!(Test-Path -LiteralPath $ZipPath)) {
-        throw ("Zip not found: {0}" -f $ZipPath)
-    }
-
     $boundary = "----cf{0}" -f ([Guid]::NewGuid().ToString("N"))
-    $fileName = [IO.Path]::GetFileName($ZipPath)
 
     # Upload API expects 'gameVersions' (IDs)
     $metadata = @{
@@ -348,50 +412,177 @@ function Publish-CurseForgeZip {
         gameVersions  = $GameVersionIds
     } | ConvertTo-Json -Depth 6
 
-    # IMPORTANT: UTF8 WITHOUT BOM (BOM before boundary can break multipart parsing)
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-
-    $ms = New-Object IO.MemoryStream
-    $writer = New-Object IO.StreamWriter($ms, $utf8NoBom)
-
-    function Write-Part([string]$s) { $writer.Write($s) }
-
-    # metadata part
-    Write-Part("--$boundary`r`n")
-    Write-Part("Content-Disposition: form-data; name=`"metadata`"`r`n")
-    Write-Part("Content-Type: application/json; charset=utf-8`r`n`r`n")
-    Write-Part($metadata)
-    Write-Part("`r`n")
-
-    # file part
-    Write-Part("--$boundary`r`n")
-    Write-Part(("Content-Disposition: form-data; name=`"file`"; filename=`"{0}`"`r`n" -f $fileName))
-    Write-Part("Content-Type: application/zip`r`n`r`n")
-    $writer.Flush()
-
-    # write zip bytes
-    $bytes = [IO.File]::ReadAllBytes($ZipPath)
-    $ms.Write($bytes, 0, $bytes.Length) | Out-Null
-
-    # closing boundary
-    $writer = New-Object IO.StreamWriter($ms, $utf8NoBom)
-    Write-Part("`r`n--$boundary--`r`n")
-    $writer.Flush()
+    $bodyBytes = New-MultipartFormBody -Boundary $boundary -MetadataJson $metadata -ZipPath $ZipPath `
+        -MetadataContentType "application/json; charset=utf-8"
 
     # Build upload headers (clone + set content-type/length)
     $uploadHeaders = @{}
     foreach ($k in $Headers.Keys) { $uploadHeaders[$k] = $Headers[$k] }
 
-    $contentType = "multipart/form-data; boundary=$boundary"
-    $uploadHeaders["Content-Type"] = $contentType
-    $uploadHeaders["Content-Length"] = $ms.Length
+    $uploadHeaders["Content-Type"] = "multipart/form-data; boundary=$boundary"
+    $uploadHeaders["Content-Length"] = $bodyBytes.Length
 
     $uri = "https://wow.curseforge.com/api/projects/{0}/upload-file" -f $ProjectId
     Write-Host ("Uploading '{0}' to CurseForge project {1} ..." -f $ZipPath, $ProjectId)
 
     # Send raw bytes (safe + predictable)
-    $bodyBytes = $ms.ToArray()
     return Invoke-RestMethod -Method Post -Uri $uri -Headers $uploadHeaders -Body $bodyBytes -ErrorAction Stop
+}
+
+# ---------------- Wago ----------------
+
+function Convert-InterfaceToWagoFlavor {
+    param([Parameter(Mandatory)][int]$Interface)
+
+    $major = [math]::Floor($Interface / 10000)
+    $minor = [math]::Floor(($Interface % 10000) / 100)
+    $patch = $Interface % 100
+
+    # Wago lists 3.80.x under both wotlk and titan. Calling it titan leaves the wotlk field
+    # free for the 3.4.x Wrath Classic client, so a TOC covering both keeps both.
+    $flavor = switch ($major) {
+        1 { "classic" }
+        2 { "bc" }
+        3 { if ($minor -ge 80) { "titan" } else { "wotlk" } }
+        4 { "cata" }
+        5 { "mop" }
+        default { if ($major -ge 9) { "retail" } else { $null } }
+    }
+
+    if (-not $flavor) { return $null }
+
+    return [pscustomobject]@{
+        Flavor    = $flavor
+        Patch     = ("{0}.{1}.{2}" -f $major, $minor, $patch)
+        Interface = $Interface
+    }
+}
+
+function Get-WagoPatchesFromToc {
+    param([Parameter(Mandatory)][string]$TocPath)
+
+    $interfaces = Get-TocInterfaceNumbers -TocPath $TocPath
+
+    # Public endpoint, no auth. It is the only list of patches Wago will accept.
+    $data = Invoke-RestMethod -Method Get -Uri "https://addons.wago.io/api/data/game" `
+        -Headers @{ "Accept" = "application/json" } -ErrorAction Stop
+
+    if (-not $data.patches) {
+        throw "Wago game data returned no patches"
+    }
+
+    $byFlavor = @{}
+    foreach ($i in $interfaces) {
+        $mapped = Convert-InterfaceToWagoFlavor -Interface $i
+        if (-not $mapped) {
+            Write-Warning ("Interface {0} maps to no Wago flavor; skipping." -f $i)
+            continue
+        }
+
+        if (-not $byFlavor.ContainsKey($mapped.Flavor)) {
+            $byFlavor[$mapped.Flavor] = New-Object System.Collections.Generic.List[object]
+        }
+
+        [void]$byFlavor[$mapped.Flavor].Add($mapped)
+    }
+
+    # One patch per flavor, the newest of ours that Wago still lists.
+    $patches = @{}
+    foreach ($flavor in $byFlavor.Keys) {
+        $known = @()
+        if ($data.patches.PSObject.Properties.Name -contains $flavor) {
+            $known = @($data.patches.$flavor)
+        }
+
+        $pick = @($byFlavor[$flavor] | Sort-Object -Property Interface -Descending |
+            Where-Object { $known -contains $_.Patch }) | Select-Object -First 1
+
+        if ($pick) {
+            $patches[$flavor] = $pick.Patch
+        } else {
+            $ours = ($byFlavor[$flavor] | ForEach-Object { $_.Patch }) -join ", "
+            Write-Warning ("Wago knows no '{0}' patch matching {1}; skipping that flavor." -f $flavor, $ours)
+        }
+    }
+
+    if ($patches.Count -eq 0) {
+        throw "No TOC Interface numbers matched a patch Wago accepts"
+    }
+
+    return $patches
+}
+
+function Publish-WagoZip {
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$ZipPath,
+        [Parameter(Mandatory)][hashtable]$Patches,
+        [Parameter(Mandatory)][string]$Stability,
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$Changelog,
+        [switch]$DryRun
+    )
+
+    $metadata = [ordered]@{
+        label     = $Label
+        stability = $Stability
+        changelog = $Changelog
+    }
+
+    foreach ($flavor in ($Patches.Keys | Sort-Object)) {
+        $metadata["supported_{0}_patch" -f $flavor] = $Patches[$flavor]
+    }
+
+    $metadataJson = $metadata | ConvertTo-Json -Depth 6
+
+    if ($DryRun) {
+        Write-Host "Dry run, not uploading. Wago metadata would be:"
+        Write-Host $metadataJson
+        return $null
+    }
+
+    $boundary = "----wago{0}" -f ([Guid]::NewGuid().ToString("N"))
+    $bodyBytes = New-MultipartFormBody -Boundary $boundary -MetadataJson $metadataJson -ZipPath $ZipPath
+
+    # No Content-Length: the request sets it from the body, and supplying it here makes
+    # Windows PowerShell 5.1 throw a protocol violation before anything is sent.
+    $headers = @{
+        "Authorization" = "Bearer $Token"
+        "Accept"        = "application/json"
+        "Content-Type"  = "multipart/form-data; boundary=$boundary"
+    }
+
+    $uri = "https://addons.wago.io/api/projects/{0}/version" -f $ProjectId
+    Write-Host ("Uploading '{0}' to Wago project {1} ..." -f $ZipPath, $ProjectId)
+
+    try {
+        return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $bodyBytes -ErrorAction Stop
+    } catch {
+        # Wago explains rejections in the response body, which the exception message drops.
+        # PowerShell 7 puts it in ErrorDetails; 5.1 leaves it on the response stream.
+        $detail = $null
+        if ($_.PSObject.Properties.Name -contains "ErrorDetails" -and $_.ErrorDetails) {
+            $detail = $_.ErrorDetails.Message
+        }
+
+        if (-not $detail -and $_.Exception.PSObject.Properties.Name -contains "Response" -and $_.Exception.Response) {
+            try {
+                $stream = $_.Exception.Response.GetResponseStream()
+                $reader = New-Object IO.StreamReader($stream)
+                $detail = $reader.ReadToEnd()
+                $reader.Dispose()
+            } catch {
+                $detail = $null
+            }
+        }
+
+        if ($detail) {
+            throw ("Wago upload failed: {0}" -f $detail)
+        }
+
+        throw
+    }
 }
 
 # ---------------- GitHub Release ----------------
@@ -565,20 +756,28 @@ else {
 
     $gameVersionIds = Get-CurseForgeGameVersionIdsFromToc -TocPath $tocPath -Headers $readHeaders
 
-    $result = Publish-CurseForgeZip `
-        -Headers $uploadHeaders `
-        -ProjectId $projectId `
-        -ZipPath $zipPath `
-        -GameVersionIds $gameVersionIds `
-        -ReleaseType $ReleaseType `
-        -DisplayName $version `
-        -Changelog $changelog `
-        -ChangelogFormat $changelogFormat
+    $result = $null
+    if ($DryRun) {
+        Write-Host "Dry run, not uploading to CurseForge."
+    }
+    else {
+        $result = Publish-CurseForgeZip `
+            -Headers $uploadHeaders `
+            -ProjectId $projectId `
+            -ZipPath $zipPath `
+            -GameVersionIds $gameVersionIds `
+            -ReleaseType $ReleaseType `
+            -DisplayName $version `
+            -Changelog $changelog `
+            -ChangelogFormat $changelogFormat
 
-    Write-Host "CurseForge upload complete."
+        Write-Host "CurseForge upload complete."
+    }
 
     if ($null -eq $result) {
-        Write-Host "No response payload returned."
+        if (-not $DryRun) {
+            Write-Host "No response payload returned."
+        }
     }
     elseif ($result.PSObject.Properties.Name -contains "id") {
         Write-Host ("File ID: {0}" -f $result.id)
@@ -587,6 +786,48 @@ else {
         try {
             $json = $result | ConvertTo-Json -Depth 6 -Compress
             Write-Host ("Response: {0}" -f $json)
+        } catch {
+            Write-Host "Response returned (unable to serialize to JSON)."
+        }
+    }
+}
+
+# ---------------- Wago upload ----------------
+
+if ($SkipWago) {
+    Write-Host "Skipping Wago upload."
+}
+else {
+    $wagoToken = $env:WAGO_API_TOKEN
+    if (-not $wagoToken -or $wagoToken.Trim() -eq "") {
+        throw "Wago API token not provided. Set WAGO_API_TOKEN environment variable, or pass -SkipWago."
+    }
+
+    $wagoProjectId = Get-TocWagoProjectId -TocPath $tocPath
+    Write-Host ("Wago ID:    {0}" -f $wagoProjectId)
+
+    $wagoPatches = Get-WagoPatchesFromToc -TocPath $tocPath
+    $summary = ($wagoPatches.Keys | Sort-Object | ForEach-Object { "{0} {1}" -f $_, $wagoPatches[$_] }) -join ", "
+    Write-Host ("Wago patches:           {0}" -f $summary)
+
+    # -ReleaseType uses CurseForge's names; Wago calls a release stable.
+    $stability = if ($ReleaseType -eq "release") { "stable" } else { $ReleaseType }
+
+    $wagoResult = Publish-WagoZip `
+        -Token $wagoToken `
+        -ProjectId $wagoProjectId `
+        -ZipPath $zipPath `
+        -Patches $wagoPatches `
+        -Stability $stability `
+        -Label $version `
+        -Changelog $latestSection.Body `
+        -DryRun:$DryRun
+
+    if ($null -ne $wagoResult) {
+        Write-Host "Wago upload complete."
+
+        try {
+            Write-Host ("Response: {0}" -f ($wagoResult | ConvertTo-Json -Depth 6 -Compress))
         } catch {
             Write-Host "Response returned (unable to serialize to JSON)."
         }
@@ -613,15 +854,20 @@ else {
         Write-Warning "Local commits are not pushed; the release tag will point at the remote HEAD, not your local HEAD."
     }
 
-    Publish-GitHubRelease `
-        -Token $githubToken `
-        -Owner $repoInfo.Owner `
-        -Repo $repoInfo.Repo `
-        -Tag $version `
-        -Notes $latestSection.Body `
-        -ZipPath $zipPath `
-        -AssetName ("{0}-{1}.zip" -f $addonName, $version) `
-        | Out-Null
+    if ($DryRun) {
+        Write-Host ("Dry run, not creating GitHub release '{0}'." -f $version)
+    }
+    else {
+        Publish-GitHubRelease `
+            -Token $githubToken `
+            -Owner $repoInfo.Owner `
+            -Repo $repoInfo.Repo `
+            -Tag $version `
+            -Notes $latestSection.Body `
+            -ZipPath $zipPath `
+            -AssetName ("{0}-{1}.zip" -f $addonName, $version) `
+            | Out-Null
+    }
 }
 
 Write-Host "Publish complete."
