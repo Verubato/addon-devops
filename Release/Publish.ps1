@@ -10,7 +10,7 @@ Assumptions:
 - Exactly one .toc exists in ../../src/
 - TOC contains:
     ## X-Curse-Project-ID: <id>
-    ## X-Wago-ID: <id>            (only when publishing to Wago)
+    ## X-Wago-ID: <id>            (optional; without it the Wago upload is skipped)
     ## Version: <version>
     ## Interface: <interface list>
 - Zip file exists in current working directory and is named:
@@ -150,7 +150,10 @@ function Get-TocLineValue {
         [string]$TocPath,
 
         [Parameter(Mandatory)]
-        [string]$Key
+        [string]$Key,
+
+        # Return $null instead of throwing when the key is absent.
+        [switch]$Optional
     )
 
     if (!(Test-Path -LiteralPath $TocPath)) {
@@ -165,6 +168,7 @@ function Get-TocLineValue {
         Select-Object -First 1
 
     if (-not $line) {
+        if ($Optional) { return $null }
         throw ("Missing '## {0}:' in TOC ({1})" -f $Key, $TocPath)
     }
 
@@ -207,7 +211,10 @@ function Get-TocCurseProjectId {
 function Get-TocWagoProjectId {
     param([Parameter(Mandatory)][string]$TocPath)
 
-    $raw = Get-TocLineValue -TocPath $TocPath -Key "X-Wago-ID"
+    # Addons that do not live on Wago simply leave the line out.
+    $raw = Get-TocLineValue -TocPath $TocPath -Key "X-Wago-ID" -Optional
+
+    if ($null -eq $raw) { return $null }
 
     if ($raw -notmatch '^[A-Za-z0-9]+$') {
         throw ("Invalid X-Wago-ID '{0}' in TOC ({1})" -f $raw, $TocPath)
@@ -794,17 +801,22 @@ else {
 
 # ---------------- Wago upload ----------------
 
+$wagoProjectId = $null
+if (-not $SkipWago) { $wagoProjectId = Get-TocWagoProjectId -TocPath $tocPath }
+
 if ($SkipWago) {
     Write-Host "Skipping Wago upload."
 }
+elseif ($null -eq $wagoProjectId) {
+    Write-Host "No '## X-Wago-ID:' in the TOC, skipping Wago upload."
+}
 else {
+    Write-Host ("Wago ID:    {0}" -f $wagoProjectId)
+
     $wagoToken = $env:WAGO_API_TOKEN
     if (-not $wagoToken -or $wagoToken.Trim() -eq "") {
         throw "Wago API token not provided. Set WAGO_API_TOKEN environment variable, or pass -SkipWago."
     }
-
-    $wagoProjectId = Get-TocWagoProjectId -TocPath $tocPath
-    Write-Host ("Wago ID:    {0}" -f $wagoProjectId)
 
     $wagoPatches = Get-WagoPatchesFromToc -TocPath $tocPath
     $summary = ($wagoPatches.Keys | Sort-Object | ForEach-Object { "{0} {1}" -f $_, $wagoPatches[$_] }) -join ", "
