@@ -1049,7 +1049,6 @@ end
 
 function widget:SetCooldownDuration() end
 function widget:SetCooldownFromDurationObject() end
-function widget:SetDurationCooldown() end
 function widget:SetDrawBling() end
 function widget:SetDrawEdge() end
 function widget:SetDrawSwipe() end
@@ -1122,11 +1121,57 @@ function widget:CloseMenu() end
 -- Widget: aura containers
 --
 -- The 12.1 container system. The client owns the buttons inside a group, so an addon only
--- ever configures groups and reads back which ones exist - which is all that is recorded here.
+-- ever configures groups and reads back which ones exist.
+--
+-- Declaring a group is the one moment an addon can touch a button: the client allocates the
+-- group's buttons there and runs initializeFrame over each, and every later write is refused
+-- while auras are secret. So a group here builds a stand-in button and runs the callback, or
+-- an addon's whole button setup would never be reached by a test.
+
+-- One button rather than the client's batch of ten. It is enough to run initializeFrame, and a
+-- forty-frame raid's worth of real batches is not something a test process should pay for.
+local AURA_BUTTONS_PER_GROUP = 1
+
+---The client's own starting values, so a getter called before any setter reports what the
+---container would really be doing.
+---@return table
+local function flowLayout(self)
+	local layout = self.__flowLayout
+
+	if not layout then
+		layout = {
+			Axis = AnchorUtil.FlowLayoutAxis.Horizontal,
+			AnchorPoint = "TOPLEFT",
+			GrowX = AnchorUtil.FlowDirection.Right,
+			GrowY = AnchorUtil.FlowDirection.Down,
+			PaddingLeft = 0,
+			PaddingRight = 0,
+			PaddingTop = 0,
+			PaddingBottom = 0,
+		}
+
+		self.__flowLayout = layout
+	end
+
+	return layout
+end
 
 function widget:AddAuraGroup(key, filterString, options)
 	self.__auraGroups = self.__auraGroups or {}
-	self.__auraGroups[key] = { Key = key, Filter = filterString, Options = options }
+
+	local group = { Key = key, Filter = filterString, Options = options, Buttons = {} }
+
+	self.__auraGroups[key] = group
+
+	for _ = 1, AURA_BUTTONS_PER_GROUP do
+		local button = newWidget("AuraButton", nil, self)
+
+		group.Buttons[#group.Buttons + 1] = button
+
+		if options and options.initializeFrame then
+			options.initializeFrame(button)
+		end
+	end
 end
 
 function widget:HasAuraGroup(key)
@@ -1135,6 +1180,18 @@ end
 
 function widget:GetAuraGroup(key)
 	return self.__auraGroups and self.__auraGroups[key] or nil
+end
+
+function widget:GetAuraGroupFrameCount(key)
+	local group = self.__auraGroups and self.__auraGroups[key]
+
+	return group and #group.Buttons or 0
+end
+
+function widget:GetAuraGroupFrame(key, index)
+	local group = self.__auraGroups and self.__auraGroups[key]
+
+	return group and group.Buttons[index] or nil
 end
 
 function widget:SetAuraGroupLayout() end
@@ -1153,11 +1210,288 @@ function widget:SetAuraGroupCandidateFilters() end
 function widget:SetCandidateFilters() end
 function widget:SetUseEditModeSource() end
 function widget:SetAuraSource() end
-function widget:SetFlowLayoutAxis() end
-function widget:SetFlowLayoutAnchorPoint() end
-function widget:SetFlowLayoutGrowthDirection() end
+function widget:UpdateAllAuras() end
+
+function widget:SetAuraProcessingPolicy(policy, options)
+	self.__auraProcessingPolicy = policy
+	self.__auraProcessingOptions = options
+end
+
+function widget:GetAuraProcessingPolicy()
+	return self.__auraProcessingPolicy, self.__auraProcessingOptions
+end
+
+function widget:SetFlowLayoutAxis(axis)
+	flowLayout(self).Axis = axis
+end
+
+function widget:GetFlowLayoutAxis()
+	return flowLayout(self).Axis
+end
+
+function widget:SetFlowLayoutAnchorPoint(point)
+	flowLayout(self).AnchorPoint = point
+end
+
+function widget:GetFlowLayoutAnchorPoint()
+	return flowLayout(self).AnchorPoint
+end
+
+function widget:SetFlowLayoutGrowthDirection(horizontal, vertical)
+	local layout = flowLayout(self)
+
+	layout.GrowX = horizontal
+	layout.GrowY = vertical
+end
+
+function widget:GetFlowLayoutGrowthDirection()
+	local layout = flowLayout(self)
+
+	return layout.GrowX, layout.GrowY
+end
+
+function widget:SetFlowLayoutPadding(left, right, top, bottom)
+	local layout = flowLayout(self)
+
+	layout.PaddingLeft = left
+	layout.PaddingRight = right
+	layout.PaddingTop = top
+	layout.PaddingBottom = bottom
+end
+
+function widget:GetFlowLayoutPadding()
+	local layout = flowLayout(self)
+
+	return layout.PaddingLeft, layout.PaddingRight, layout.PaddingTop, layout.PaddingBottom
+end
+
+-- nil is the client's own "unlimited", so a line size is only capped once one is asked for.
+function widget:SetFlowLayoutMaximumLineSize(size)
+	flowLayout(self).MaximumLineSize = size
+end
+
+function widget:GetFlowLayoutMaximumLineSize()
+	return flowLayout(self).MaximumLineSize
+end
+
+function widget:ResetFlowLayoutOptions()
+	self.__flowLayout = nil
+end
+
 function widget:SetGridMode() end
 function widget:SetInvertLayout() end
+
+-- Widget: aura buttons
+--
+-- A group's buttons belong to the client: it creates them, decides which aura each one shows and
+-- drives their regions with data the addon never sees. The one reach an addon has is registering
+-- its own regions, so that registration is what is modelled here. Nothing draws; each setter
+-- records what it was handed, so a test can see the button was set up and with what.
+
+---The client will only drive a region that lives under the button, and refuses one that reaches
+---past it. Registering the wrong region is silent until it is in front of a player, so it is
+---worth failing here.
+---@return table? region
+local function registerAuraRegion(button, region, what)
+	if region == nil then
+		return nil
+	end
+
+	local parent = region.__parent
+
+	while parent do
+		if parent == button then
+			return region
+		end
+
+		parent = parent.__parent
+	end
+
+	error(what .. ": the region must be a descendant of the aura button", 3)
+end
+
+function widget:SetIcon(texture)
+	self.__auraIcon = registerAuraRegion(self, texture, "SetIcon")
+end
+
+function widget:GetIcon()
+	return self.__auraIcon
+end
+
+function widget:ClearIcon()
+	self.__auraIcon = nil
+end
+
+function widget:SetSpellName(fontString)
+	self.__auraSpellName = registerAuraRegion(self, fontString, "SetSpellName")
+end
+
+function widget:GetSpellName()
+	return self.__auraSpellName
+end
+
+function widget:ClearSpellName()
+	self.__auraSpellName = nil
+end
+
+-- Binding the duration text MERGES its options rather than replacing them, so an option left out
+-- of a re-bind keeps whatever the last one set. That is how a colour curve outlives the call that
+-- stopped asking for one.
+function widget:SetDurationText(fontString, options)
+	self.__auraDurationText = registerAuraRegion(self, fontString, "SetDurationText")
+
+	local bound = self.__auraDurationTextOptions or {}
+
+	for key, value in pairs(options or {}) do
+		bound[key] = value
+	end
+
+	self.__auraDurationTextOptions = bound
+end
+
+function widget:GetDurationText()
+	return self.__auraDurationText, self.__auraDurationTextOptions
+end
+
+function widget:ClearDurationText()
+	self.__auraDurationText = nil
+	self.__auraDurationTextOptions = nil
+end
+
+function widget:SetDurationCooldown(cooldown)
+	self.__auraDurationCooldown = registerAuraRegion(self, cooldown, "SetDurationCooldown")
+end
+
+function widget:GetDurationCooldown()
+	return self.__auraDurationCooldown
+end
+
+function widget:ClearDurationCooldown()
+	self.__auraDurationCooldown = nil
+end
+
+function widget:SetDurationBar(statusBar, options)
+	self.__auraDurationBar = registerAuraRegion(self, statusBar, "SetDurationBar")
+	self.__auraDurationBarOptions = options
+end
+
+function widget:GetDurationBar()
+	return self.__auraDurationBar, self.__auraDurationBarOptions
+end
+
+function widget:ClearDurationBar()
+	self.__auraDurationBar = nil
+	self.__auraDurationBarOptions = nil
+end
+
+function widget:SetApplicationBar(statusBar, options)
+	self.__auraApplicationBar = registerAuraRegion(self, statusBar, "SetApplicationBar")
+	self.__auraApplicationBarOptions = options
+end
+
+function widget:GetApplicationBar()
+	return self.__auraApplicationBar, self.__auraApplicationBarOptions
+end
+
+function widget:ClearApplicationBar()
+	self.__auraApplicationBar = nil
+	self.__auraApplicationBarOptions = nil
+end
+
+function widget:SetApplicationCount(fontString, options)
+	self.__auraApplicationCount = registerAuraRegion(self, fontString, "SetApplicationCount")
+	self.__auraApplicationCountOptions = options
+end
+
+function widget:GetApplicationCount()
+	return self.__auraApplicationCount, self.__auraApplicationCountOptions
+end
+
+function widget:ClearApplicationCount()
+	self.__auraApplicationCount = nil
+	self.__auraApplicationCountOptions = nil
+end
+
+function widget:SetDispelTypeText(fontString, options)
+	self.__auraDispelText = registerAuraRegion(self, fontString, "SetDispelTypeText")
+	self.__auraDispelTextOptions = options
+end
+
+function widget:GetDispelTypeText()
+	return self.__auraDispelText, self.__auraDispelTextOptions
+end
+
+function widget:ClearDispelTypeText()
+	self.__auraDispelText = nil
+	self.__auraDispelTextOptions = nil
+end
+
+-- An index stays valid for the life of the button: a removal takes the index Add handed back, so
+-- it clears that slot rather than shifting the ones after it.
+function widget:AddDispelTypeTexture(texture, options)
+	registerAuraRegion(self, texture, "AddDispelTypeTexture")
+
+	local textures = self.__auraDispelTextures or { Last = 0 }
+	local index = textures.Last + 1
+
+	textures.Last = index
+	textures[index] = { Texture = texture, Options = options }
+	self.__auraDispelTextures = textures
+
+	return index
+end
+
+function widget:GetDispelTypeTexture(index)
+	local textures = self.__auraDispelTextures
+
+	return textures and textures[index] or nil
+end
+
+function widget:RemoveDispelTypeTexture(index)
+	local textures = self.__auraDispelTextures
+
+	if textures then
+		textures[index] = nil
+	end
+end
+
+function widget:ClearDispelTypeTextures()
+	self.__auraDispelTextures = nil
+end
+
+function widget:GetDispelTypeTextureCount()
+	local textures = self.__auraDispelTextures
+
+	if not textures then
+		return 0
+	end
+
+	local count = 0
+
+	for index = 1, textures.Last do
+		if textures[index] then
+			count = count + 1
+		end
+	end
+
+	return count
+end
+
+function widget:SetCancelAuraButtons(clicks)
+	self.__auraCancelButtons = clicks
+end
+
+function widget:GetCancelAuraButtons()
+	return self.__auraCancelButtons
+end
+
+function widget:SetTooltipAnchorPoint(point, offsetX, offsetY)
+	self.__auraTooltipAnchor = { Point = point, OffsetX = offsetX, OffsetY = offsetY }
+end
+
+function widget:SetHideTooltipInCombat(hide)
+	self.__auraHideTooltipInCombat = hide == true
+end
 
 -- Widget: models and unit frames
 
