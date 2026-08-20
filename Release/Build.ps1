@@ -74,8 +74,38 @@ $zipFileName = "$version.zip"
 # remove the previous build zip file (if exists)
 Remove-Item $zipFileName -ErrorAction SilentlyContinue
 
-# create the zip file
-Compress-Archive -Path $zipFolders -DestinationPath $zipFileName
+# Both Compress-Archive and ZipFile.CreateFromDirectory leave the Windows backslashes in the
+# local file headers and only put forward slashes in the central directory. Windows unzippers
+# read the central directory and look right, while macOS and Linux ones read the local headers
+# and dump every file into a single folder with backslashes in its name. Naming each entry by
+# hand is the only way to get forward slashes into both.
+if (-not ("System.IO.Compression.ZipFile" -as [type])) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+}
+
+$zipPath = Join-Path (Get-Location).Path $zipFileName
+$archive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+
+try {
+    foreach ($folder in $zipFolders) {
+        $root = (Resolve-Path -LiteralPath $folder).Path
+
+        foreach ($file in @(Get-ChildItem -LiteralPath $root -File -Recurse)) {
+            $relative = $file.FullName.Substring($root.Length + 1).Replace("\", "/")
+            $entryName = "$folder/$relative"
+
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $archive,
+                $file.FullName,
+                $entryName,
+                [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    }
+}
+finally {
+    $archive.Dispose()
+}
 
 # remove the temp folders
 foreach ($folder in $zipFolders) {
