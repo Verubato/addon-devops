@@ -54,6 +54,47 @@ for key in pairs(_G) do
 	baselineGlobals[key] = true
 end
 
+-- Minted secret values, keyed by the proxy handed out. The underlying value is boxed because a
+-- secret can wrap false or nil, which a bare registry entry could not tell from absence.
+local secrets = {}
+
+local function unwrapSecret(value)
+	local box = secrets[value]
+
+	if box == nil then
+		return value, false
+	end
+
+	return box.value, true
+end
+
+local function forbidSecret(operation)
+	return function()
+		error("secret value: " .. operation .. " is forbidden on a secret value, pass it to a secure setter instead", 2)
+	end
+end
+
+-- Lua 5.1 cannot arm every trap the live client has. `secret == plain` skips __eq, so does
+-- `secret == secret` (same object short-circuits first); `type()`, `#` on a table, `tonumber`
+-- can't be overridden or consulted, and a non-table ordered comparison raises Lua's own message.
+local secretMeta = {
+	__add = forbidSecret("addition"),
+	__sub = forbidSecret("subtraction"),
+	__mul = forbidSecret("multiplication"),
+	__div = forbidSecret("division"),
+	__mod = forbidSecret("modulo"),
+	__pow = forbidSecret("exponentiation"),
+	__unm = forbidSecret("negation"),
+	__concat = forbidSecret("concatenation"),
+	__len = forbidSecret("length"),
+	__tostring = forbidSecret("tostring"),
+	__lt = forbidSecret("ordered comparison"),
+	__le = forbidSecret("ordered comparison"),
+	__eq = forbidSecret("equality comparison"),
+	__index = forbidSecret("indexing"),
+	__newindex = forbidSecret("assignment"),
+}
+
 -- Widget internals
 
 local function noop() end
@@ -386,8 +427,24 @@ function widget:GetAlpha()
 end
 
 ---12.0's secure setter. A test drives it with a plain boolean; the client may pass a secret.
+---Records whether the driving value was secret so a test can prove the addon took that path.
 function widget:SetAlphaFromBoolean(value)
-	self.__alpha = value and 1 or 0
+	local plain, wasSecret = unwrapSecret(value)
+
+	self.__alpha = plain and 1 or 0
+	self.__alphaFromBoolean = plain and true or false
+	self.__alphaFromBooleanWasSecret = wasSecret
+end
+
+---The visibility half of the same pair, and the only setter that may be handed a secret shown
+---state. Routed through SetShown so OnShow and OnHide still run.
+function widget:SetShownFromBoolean(value)
+	local plain, wasSecret = unwrapSecret(value)
+
+	self.__shownFromBoolean = plain and true or false
+	self.__shownFromBooleanWasSecret = wasSecret
+
+	self:SetShown(plain and true or false)
 end
 
 function widget:SetIgnoreParentAlpha() end
@@ -1578,6 +1635,18 @@ end
 
 -- Public control surface
 
+---Mints a secret value wrapping value, so a test can drive an addon's issecretvalue guard down
+---its secret branch. Every forbidden operation on the result raises.
+---
+---The proxy is a table, so `if secret then` is always true, even for a secret wrapping false.
+function M.MakeSecret(value)
+	local proxy = setmetatable({}, secretMeta)
+
+	secrets[proxy] = { value = value }
+
+	return proxy
+end
+
 ---Creates a frame outside CreateFrame, for a harness that needs to fake a Blizzard frame.
 function M.NewFrame(objectType, name, parent)
 	local frame = newWidget(objectType or "Frame", name, parent)
@@ -1691,6 +1760,9 @@ local function installState()
 		PlayerName = "Tester",
 		-- Printed lines, so a suite can assert an addon stayed quiet on a clean load.
 		Prints = {},
+		-- What C_Secrets.ShouldAurasBeSecret answers. False by default, so an aura path only
+		-- goes secret for a suite that asks for it.
+		AurasAreSecret = false,
 	}
 end
 
@@ -1722,6 +1794,7 @@ function M.Install(options)
 	timers = {}
 	tickers = {}
 	frameCounter = 0
+	secrets = {}
 
 	local State = M.State
 
@@ -1811,10 +1884,10 @@ function M.Install(options)
 	end
 	_G.forceinsecure = noop
 
-	-- 12.0 secret values. Nothing in a Lua-only harness is secret, so the predicate is false
-	-- and the guards addons wrap around secret handling take their non-secret branch.
-	_G.issecretvalue = function()
-		return false
+	-- 12.0 secret values. Only what a test minted with M.MakeSecret is secret, so a suite that
+	-- mints nothing sends every guard down its non-secret branch as before.
+	_G.issecretvalue = function(value)
+		return secrets[value] ~= nil
 	end
 
 	_G.geterrorhandler = function()
@@ -3538,7 +3611,7 @@ function M.Install(options)
 
 	_G.C_Secrets = {
 		ShouldAurasBeSecret = function()
-			return false
+			return State.AurasAreSecret == true
 		end,
 		GetSpellAuraSecrecy = function()
 			return nil
@@ -3597,8 +3670,21 @@ function M.Install(options)
 		CreateColorCurve = function()
 			return newCurve(true)
 		end,
+		-- The sanctioned way to turn a maybe-secret boolean into a plain number. The client
+		-- rejects a non-number for either branch, which is what catches an addon passing the
+		-- booleans it wanted back out.
 		EvaluateColorValueFromBoolean = function(boolean, ifTrue, ifFalse)
-			return boolean and ifTrue or ifFalse
+			if type(ifTrue) ~= "number" then
+				error("bad argument #2 to 'EvaluateColorValueFromBoolean' (number expected, got " .. type(ifTrue) .. ")", 2)
+			end
+
+			if type(ifFalse) ~= "number" then
+				error("bad argument #3 to 'EvaluateColorValueFromBoolean' (number expected, got " .. type(ifFalse) .. ")", 2)
+			end
+
+			local plain = unwrapSecret(boolean)
+
+			return plain and ifTrue or ifFalse
 		end,
 	}
 
