@@ -360,7 +360,9 @@ function widget:SetClampRectInsets() end
 function widget:SetResizeBounds() end
 function widget:SetMinResize() end
 function widget:SetMaxResize() end
-function widget:SetClipsChildren() end
+function widget:SetClipsChildren(clips)
+	self.__clipsChildren = clips and true or false
+end
 function widget:SetDontSavePosition() end
 function widget:SetUserPlaced() end
 
@@ -428,10 +430,13 @@ end
 
 ---12.0's secure setter. A test drives it with a plain boolean; the client may pass a secret.
 ---Records whether the driving value was secret so a test can prove the addon took that path.
-function widget:SetAlphaFromBoolean(value)
+function widget:SetAlphaFromBoolean(value, alphaIfTrue, alphaIfFalse)
 	local plain, wasSecret = unwrapSecret(value)
 
-	self.__alpha = plain and 1 or 0
+	alphaIfTrue = alphaIfTrue or 1
+	alphaIfFalse = alphaIfFalse or 0
+
+	self.__alpha = plain and alphaIfTrue or alphaIfFalse
 	self.__alphaFromBoolean = plain and true or false
 	self.__alphaFromBooleanWasSecret = wasSecret
 end
@@ -1008,8 +1013,13 @@ end
 function widget:SetValueStep() end
 function widget:SetObeyStepOnDrag() end
 function widget:SetOrientation() end
-function widget:SetReverseFill() end
-function widget:SetFillStyle() end
+function widget:SetReverseFill(reverse)
+	self.__reverseFill = reverse and true or false
+end
+
+function widget:SetFillStyle(style)
+	self.__fillStyle = style
+end
 function widget:SetStatusBarDesaturated() end
 
 function widget:SetThumbTexture(texture)
@@ -2167,6 +2177,36 @@ function M.Install(options)
 		end,
 	})
 
+	-- Code branches on these values, so they need their real numbers rather than whatever the
+	-- auto-vivifying groups above would hand out.
+	_G.Enum.UnitDamageAbsorbClampMode = {
+		MissingHealth = 0,
+		MissingHealthWithoutIncomingHeals = 1,
+		MaximumHealth = 2,
+	}
+	_G.Enum.UnitHealAbsorbClampMode = {
+		CurrentHealth = 0,
+		MaximumHealth = 1,
+	}
+	_G.Enum.UnitHealAbsorbMode = {
+		ReducedByIncomingHeals = 0,
+		Total = 1,
+	}
+	_G.Enum.UnitIncomingHealClampMode = {
+		MissingHealth = 0,
+		MaximumHealth = 1,
+	}
+	_G.Enum.UnitMaximumHealthMode = {
+		Default = 0,
+		WithAbsorbs = 1,
+	}
+	_G.Enum.StatusBarFillStyle = {
+		Standard = 0,
+		StandardNoRangeFill = 1,
+		Center = 2,
+		Reverse = 3,
+	}
+
 	-- The aura container constants are plain globals rather than Enum members, and addons
 	-- index them the same auto-vivifying way.
 	for _, name in ipairs({
@@ -2920,12 +2960,32 @@ function M.Install(options)
 		return 0
 	end
 
+	_G.UnitGetTotalHealAbsorbs = function()
+		return 0
+	end
+
 	_G.UnitGetIncomingHeals = function()
 		return 0
 	end
 
-	_G.UnitGetDetailedHealPrediction = function()
-		return 0, 0, 0
+	---Reads the inputs through the unit globals, so a suite that already stubs those needs no
+	---new setter.
+	_G.UnitGetDetailedHealPrediction = function(unit, healerUnit, calculator)
+		if not calculator then
+			return 0, 0, 0
+		end
+
+		-- The client answers with zero for the healer's share when it is not asked about one.
+		local fromHealer = healerUnit and _G.UnitGetIncomingHeals(unit, healerUnit) or 0
+
+		calculator.__fillPredictedValues(
+			_G.UnitHealth(unit),
+			_G.UnitHealthMax(unit),
+			_G.UnitGetIncomingHeals(unit),
+			fromHealer,
+			_G.UnitGetTotalAbsorbs(unit),
+			_G.UnitGetTotalHealAbsorbs(unit)
+		)
 	end
 
 	_G.UnitGroupRolesAssigned = function()
@@ -3687,6 +3747,232 @@ function M.Install(options)
 			return plain and ifTrue or ifFalse
 		end,
 	}
+
+	-- 12.0's server-side heal prediction math, another opaque handle standing in as a plain
+	-- table like the curve objects above.
+	local function newHealPredictionCalculator()
+		local calculator
+
+		local function maxHealth()
+			if calculator.__maximumHealthMode == _G.Enum.UnitMaximumHealthMode.WithAbsorbs then
+				return calculator.__healthMax + calculator.__totalDamageAbsorbs
+			end
+
+			return calculator.__healthMax
+		end
+
+		local function missingHealth()
+			return math.max(0, maxHealth() - calculator.__health)
+		end
+
+		local function rawIncomingHeals()
+			if calculator.__healAbsorbMode == _G.Enum.UnitHealAbsorbMode.Total then
+				return calculator.__totalIncomingHeals
+			end
+
+			return math.max(0, calculator.__totalIncomingHeals - calculator.__totalHealAbsorbs)
+		end
+
+		local function rawHealAbsorbs()
+			if calculator.__healAbsorbMode == _G.Enum.UnitHealAbsorbMode.Total then
+				return calculator.__totalHealAbsorbs
+			end
+
+			return math.max(0, calculator.__totalHealAbsorbs - calculator.__totalIncomingHeals)
+		end
+
+		local function maximumIncomingHeals()
+			if calculator.__incomingHealClampMode == _G.Enum.UnitIncomingHealClampMode.MaximumHealth then
+				return maxHealth()
+			end
+
+			return math.max(0, maxHealth() * calculator.__incomingHealOverflowPercent - calculator.__health)
+		end
+
+		local function maximumHealAbsorbs()
+			if calculator.__healAbsorbClampMode == _G.Enum.UnitHealAbsorbClampMode.MaximumHealth then
+				return maxHealth()
+			end
+
+			return calculator.__health
+		end
+
+		-- The damage absorb's clamp measures missing health net of what the heals will fill, so
+		-- it needs the clamped amount rather than the raw one.
+		local function incomingHealsAmount()
+			return math.min(rawIncomingHeals(), maximumIncomingHeals())
+		end
+
+		local function maximumDamageAbsorbs()
+			local mode = calculator.__damageAbsorbClampMode
+
+			if mode == _G.Enum.UnitDamageAbsorbClampMode.MaximumHealth then
+				return maxHealth()
+			end
+
+			if mode == _G.Enum.UnitDamageAbsorbClampMode.MissingHealthWithoutIncomingHeals then
+				return missingHealth()
+			end
+
+			return math.max(0, missingHealth() - incomingHealsAmount())
+		end
+
+		-- Re-mints every return as secret when any input was, so an addon that only ever reads
+		-- these getters cannot tell the difference between plain and secret arithmetic.
+		local function remint(...)
+			if not calculator.__hasSecretValues then
+				return ...
+			end
+
+			local n = select("#", ...)
+			local values = { ... }
+
+			for i = 1, n do
+				values[i] = M.MakeSecret(values[i])
+			end
+
+			return unpack(values, 1, n)
+		end
+
+		local function restoreDefaults()
+			calculator.__maximumHealthMode = _G.Enum.UnitMaximumHealthMode.Default
+			calculator.__healAbsorbMode = _G.Enum.UnitHealAbsorbMode.ReducedByIncomingHeals
+			calculator.__healAbsorbClampMode = _G.Enum.UnitHealAbsorbClampMode.CurrentHealth
+			calculator.__incomingHealClampMode = _G.Enum.UnitIncomingHealClampMode.MissingHealth
+			calculator.__incomingHealOverflowPercent = 1.0
+			calculator.__damageAbsorbClampMode = _G.Enum.UnitDamageAbsorbClampMode.MissingHealth
+			calculator.__health = 0
+			calculator.__healthMax = 0
+			calculator.__totalIncomingHeals = 0
+			calculator.__totalIncomingHealsFromHealer = 0
+			calculator.__totalDamageAbsorbs = 0
+			calculator.__totalHealAbsorbs = 0
+			calculator.__hasSecretValues = false
+		end
+
+		calculator = {
+			GetCurrentHealth = function(self)
+				return remint(self.__health)
+			end,
+			GetMaximumHealth = function()
+				return remint(maxHealth())
+			end,
+			GetMissingHealth = function()
+				return remint(missingHealth())
+			end,
+			GetCurrentHealthPercent = function(self)
+				local max = maxHealth()
+				return remint(max > 0 and self.__health / max or 0)
+			end,
+			GetMissingHealthPercent = function()
+				local max = maxHealth()
+				return remint(max > 0 and missingHealth() / max or 0)
+			end,
+			GetTotalDamageAbsorbs = function(self)
+				return remint(self.__totalDamageAbsorbs)
+			end,
+			GetTotalHealAbsorbs = function(self)
+				return remint(self.__totalHealAbsorbs)
+			end,
+			GetTotalIncomingHeals = function(self)
+				return remint(self.__totalIncomingHeals)
+			end,
+			GetTotalIncomingHealsFromHealer = function(self)
+				return remint(self.__totalIncomingHealsFromHealer)
+			end,
+			GetMaximumIncomingHeals = function()
+				return remint(maximumIncomingHeals())
+			end,
+			GetMaximumHealAbsorbs = function()
+				return remint(maximumHealAbsorbs())
+			end,
+			GetMaximumDamageAbsorbs = function()
+				return remint(maximumDamageAbsorbs())
+			end,
+			GetIncomingHeals = function(self)
+				local raw = rawIncomingHeals()
+				local max = maximumIncomingHeals()
+				local amount = math.min(raw, max)
+				local amountFromHealer = math.min(self.__totalIncomingHealsFromHealer, amount)
+
+				return remint(amount, amountFromHealer, amount - amountFromHealer, raw > max)
+			end,
+			GetHealAbsorbs = function()
+				local raw = rawHealAbsorbs()
+				local max = maximumHealAbsorbs()
+
+				return remint(math.min(raw, max), raw > max)
+			end,
+			GetDamageAbsorbs = function(self)
+				local raw = self.__totalDamageAbsorbs
+				local max = maximumDamageAbsorbs()
+
+				return remint(math.min(raw, max), raw > max)
+			end,
+			HasSecretValues = function(self)
+				return self.__hasSecretValues
+			end,
+			SetMaximumHealthMode = function(self, mode)
+				self.__maximumHealthMode = mode
+			end,
+			SetHealAbsorbMode = function(self, mode)
+				self.__healAbsorbMode = mode
+			end,
+			SetHealAbsorbClampMode = function(self, mode)
+				self.__healAbsorbClampMode = mode
+			end,
+			SetIncomingHealClampMode = function(self, mode)
+				self.__incomingHealClampMode = mode
+			end,
+			SetIncomingHealOverflowPercent = function(self, percent)
+				self.__incomingHealOverflowPercent = percent
+			end,
+			SetDamageAbsorbClampMode = function(self, mode)
+				self.__damageAbsorbClampMode = mode
+			end,
+			Reset = restoreDefaults,
+			SetToDefaults = restoreDefaults,
+			ResetPredictedValues = function(self)
+				self.__health = 0
+				self.__healthMax = 0
+				self.__totalIncomingHeals = 0
+				self.__totalIncomingHealsFromHealer = 0
+				self.__totalDamageAbsorbs = 0
+				self.__totalHealAbsorbs = 0
+				self.__hasSecretValues = false
+			end,
+			-- Not part of the Blizzard API. UnitGetDetailedHealPrediction calls this to hand
+			-- the six inputs across, unwrapping any of them minted secret.
+			__fillPredictedValues = function(health, healthMax, totalIncomingHeals, totalIncomingHealsFromHealer, totalDamageAbsorbs, totalHealAbsorbs)
+				local values = { health, healthMax, totalIncomingHeals, totalIncomingHealsFromHealer, totalDamageAbsorbs, totalHealAbsorbs }
+				local hasSecretValues = false
+
+				-- Counted rather than walked with ipairs, which would stop at the first of these
+				-- the client left nil and leave a proxy behind in the ones after it.
+				for i = 1, 6 do
+					local plain, wasSecret = unwrapSecret(values[i])
+					values[i] = plain or 0
+					hasSecretValues = hasSecretValues or wasSecret
+				end
+
+				calculator.__health = values[1]
+				calculator.__healthMax = values[2]
+				calculator.__totalIncomingHeals = values[3]
+				calculator.__totalIncomingHealsFromHealer = values[4]
+				calculator.__totalDamageAbsorbs = values[5]
+				calculator.__totalHealAbsorbs = values[6]
+				calculator.__hasSecretValues = hasSecretValues
+			end,
+		}
+
+		restoreDefaults()
+
+		return calculator
+	end
+
+	_G.CreateUnitHealPredictionCalculator = function()
+		return newHealPredictionCalculator()
+	end
 
 	_G.C_DurationUtil = {
 		CreateDuration = function()
