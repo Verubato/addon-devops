@@ -783,7 +783,14 @@ end
 -- whether text fits, so a constant would make every string the same width and hide the branch.
 
 function widget:SetText(text)
-	self.__text = text ~= nil and tostring(text) or ""
+	if text == nil then
+		self.__text = ""
+	elseif secrets[text] ~= nil then
+		-- A font string is one of the sinks a secret may reach, so it is kept as it came.
+		self.__text = text
+	else
+		self.__text = tostring(text)
+	end
 end
 
 function widget:SetFormattedText(format, ...)
@@ -1019,6 +1026,14 @@ end
 
 function widget:SetFillStyle(style)
 	self.__fillStyle = style
+end
+
+---12.1 hands a status bar a duration object and the client animates the fill itself. Nothing here
+---runs a clock, so a test reads back what the bar was given.
+function widget:SetTimerDuration(duration, curve, direction)
+	self.__timerDuration = duration
+	self.__timerCurve = curve
+	self.__timerDirection = direction
 end
 function widget:SetStatusBarDesaturated() end
 
@@ -1657,6 +1672,53 @@ function M.MakeSecret(value)
 	return proxy
 end
 
+---Builds a duration object holding a plain total and elapsed, in seconds. The client keeps
+---both behind a secret and only lets a widget read them, so a test drives one of these instead.
+---@param total number
+---@param elapsed number?
+function M.MakeDuration(total, elapsed)
+	local duration = { __total = total or 0, __elapsed = elapsed or 0 }
+
+	function duration:SetDuration(seconds)
+		self.__total = seconds
+		self.__elapsed = 0
+	end
+
+	function duration:SetTimeFromStart(startTime, seconds)
+		self.__total = seconds
+		self.__elapsed = math.max(0, math.min(seconds, _G.GetTime() - startTime))
+	end
+
+	function duration:GetTotalDuration()
+		return self.__total
+	end
+
+	function duration:GetElapsedDuration()
+		return self.__elapsed
+	end
+
+	function duration:GetRemainingDuration()
+		return math.max(0, self.__total - self.__elapsed)
+	end
+
+	function duration:IsZero()
+		return self:GetRemainingDuration() == 0
+	end
+
+	duration.EvaluateTotalDuration = duration.GetTotalDuration
+	duration.EvaluateRemainingDuration = duration.GetRemainingDuration
+
+	function duration:EvaluateRemainingPercent()
+		if self.__total <= 0 then
+			return 0
+		end
+
+		return self:GetRemainingDuration() / self.__total
+	end
+
+	return duration
+end
+
 ---Creates a frame outside CreateFrame, for a harness that needs to fake a Blizzard frame.
 function M.NewFrame(objectType, name, parent)
 	local frame = newWidget(objectType or "Frame", name, parent)
@@ -2205,6 +2267,10 @@ function M.Install(options)
 		StandardNoRangeFill = 1,
 		Center = 2,
 		Reverse = 3,
+	}
+	_G.Enum.StatusBarTimerDirection = {
+		ElapsedTime = 0,
+		RemainingTime = 1,
 	}
 
 	-- The aura container constants are plain globals rather than Enum members, and addons
@@ -3976,27 +4042,22 @@ function M.Install(options)
 
 	_G.C_DurationUtil = {
 		CreateDuration = function()
-			return {
-				SetTimeFromStart = noop,
-				SetDuration = noop,
-				GetRemainingDuration = function()
-					return 0
-				end,
-				GetTotalDuration = function()
-					return 0
-				end,
-				EvaluateRemainingDuration = function()
-					return 0
-				end,
-				EvaluateRemainingPercent = function()
-					return 0
-				end,
-				EvaluateTotalDuration = function()
-					return 0
-				end,
-			}
+			return M.MakeDuration(0, 0)
 		end,
 	}
+
+	-- 12.1's cast readers. A test that wants a bar running hands one of these a duration.
+	_G.UnitCastingDuration = function()
+		return nil
+	end
+
+	_G.UnitChannelDuration = function()
+		return nil
+	end
+
+	_G.UnitEmpoweredChannelDuration = function()
+		return nil
+	end
 
 	-- Settings
 
