@@ -2912,6 +2912,10 @@ function M.Install(options)
 	_G.UnitIsVisible = unitExists
 	_G.UnitPlayerControlled = unitExists
 
+	_G.UnitTreatAsPlayerForDisplay = function()
+		return false
+	end
+
 	_G.UnitIsDeadOrGhost = function()
 		return false
 	end
