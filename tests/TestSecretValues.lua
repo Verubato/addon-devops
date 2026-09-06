@@ -193,6 +193,45 @@ fw.describe("WowMock - operations a secret still allows", function()
 	end)
 end)
 
+fw.describe("WowMock - string.format on a secret", function()
+	fw.before_each(function()
+		WowMock.Install()
+	end)
+
+	fw.it("marks the result secret, so a key built from one cannot be compared or stored", function()
+		local key = string.format("%.2f_%.2f", WowMock.MakeSecret(0.5), 1)
+
+		fw.truthy(issecretvalue(key), "the formatted result")
+	end)
+
+	fw.it("taints the result when only the template is secret", function()
+		local key = string.format(WowMock.MakeSecret("%d"), 1)
+
+		fw.truthy(issecretvalue(key), "a secret template")
+	end)
+
+	fw.it("keeps the traps armed on what it hands back", function()
+		local key = string.format("%d", WowMock.MakeSecret(1))
+		local message = ErrorFrom(function()
+			return "key=" .. key
+		end)
+
+		fw.not_nil(message, "concatenating the result raised")
+	end)
+
+	fw.it("wraps the _G.format alias too, on the very first Install", function()
+		fw.truthy(rawequal(_G.format, string.format), "the alias is the wrapper")
+		fw.truthy(issecretvalue(format("%d", WowMock.MakeSecret(3))), "a secret through the alias")
+	end)
+
+	fw.it("leaves a format with nothing secret in it alone", function()
+		local plain = string.format("%d_%s", 3, "x")
+
+		fw.eq(plain, "3_x", "the formatted string")
+		fw.falsy(issecretvalue(plain), "nothing secret went in")
+	end)
+end)
+
 fw.describe("WowMock - secure setters", function()
 	local frame
 

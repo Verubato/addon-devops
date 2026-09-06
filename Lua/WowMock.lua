@@ -68,6 +68,10 @@ local function unwrapSecret(value)
 	return box.value, true
 end
 
+-- Captured before Install swaps string.format, so installing twice cannot wrap the wrapper.
+-- Named `format` because Lua 5.1 takes the reported argument name from the call site.
+local format = string.format
+
 -- A metatable cannot trap type(), so a secret proxy would read back as "table".
 local realType = type
 
@@ -92,6 +96,7 @@ end
 -- Lua 5.1 cannot arm every trap the live client has. `secret == plain` skips __eq, so does
 -- `secret == secret` (same object short-circuits first); `type()`, `#` on a table, `tonumber`
 -- can't be overridden or consulted, and a non-table ordered comparison raises Lua's own message.
+-- So a secret used as a table key, or compared with ~=, passes here and raises live.
 local secretMeta = {
 	__add = forbidSecret("addition"),
 	__sub = forbidSecret("subtraction"),
@@ -1996,7 +2001,6 @@ function M.Install(options)
 	_G.strchar = string.char
 	_G.strlen = string.len
 	_G.gsub = string.gsub
-	_G.format = string.format
 	_G.max = math.max
 	_G.min = math.min
 	_G.abs = math.abs
@@ -2029,6 +2033,27 @@ function M.Install(options)
 	_G.issecretvalue = function(value)
 		return secrets[value] ~= nil
 	end
+
+	-- The client formats a secret and hands a secret string back, so the result is secret too.
+	string.format = function(template, ...) -- luacheck: ignore 122
+		local plainTemplate, anySecret = unwrapSecret(template)
+		local count = select("#", ...)
+		local args = {}
+
+		for index = 1, count do
+			local plain, wasSecret = unwrapSecret((select(index, ...)))
+
+			args[index] = plain
+			anySecret = anySecret or wasSecret
+		end
+
+		local result = format(plainTemplate, unpack(args, 1, count))
+
+		return anySecret and M.MakeSecret(result) or result
+	end
+
+	-- Assigned here rather than beside the other aliases, which run before the wrapper exists.
+	_G.format = string.format
 
 	_G.geterrorhandler = function()
 		return error
