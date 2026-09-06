@@ -1152,6 +1152,14 @@ function widget:GetCooldownDuration()
 	return self.__cooldownDuration or 0
 end
 
+function widget:SetHideCountdownNumbers(hide)
+	self.__hideCountdownNumbers = hide
+end
+
+function widget:SetReverse(reverse)
+	self.__reverse = reverse
+end
+
 function widget:GetCooldownTimes()
 	return (self.__cooldownStart or 0) * 1000, (self.__cooldownDuration or 0) * 1000
 end
@@ -1161,10 +1169,8 @@ function widget:SetCooldownFromDurationObject() end
 function widget:SetDrawBling() end
 function widget:SetDrawEdge() end
 function widget:SetDrawSwipe() end
-function widget:SetHideCountdownNumbers() end
 function widget:SetSwipeColor() end
 function widget:SetSwipeTexture() end
-function widget:SetReverse() end
 function widget:SetCountdownFont() end
 function widget:SetCountdownMillisecondsThreshold() end
 function widget:Clear() end
