@@ -705,8 +705,10 @@ function widget:SetFlipBookFrameHeight() end
 
 -- Widget: textures
 
+-- A texture has one art slot on the client, so setting either kind clears the other.
 function widget:SetTexture(texture)
 	self.__texture = texture
+	self.__atlas = nil
 end
 
 function widget:GetTexture()
@@ -715,6 +717,7 @@ end
 
 function widget:SetAtlas(atlas)
 	self.__atlas = atlas
+	self.__texture = nil
 end
 
 function widget:GetAtlas()

@@ -258,6 +258,31 @@ fw.describe("WowMock - secure setters", function()
 	end)
 end)
 
+fw.describe("WowMock - SetTexture and SetAtlas clear each other", function()
+	local texture
+
+	fw.before_each(function()
+		WowMock.Install()
+		texture = WowMock.NewFrame("Texture")
+	end)
+
+	fw.it("clears an atlas set earlier when a texture is set over it", function()
+		texture:SetAtlas("some-atlas")
+		texture:SetTexture([[Interface\Some\Path]])
+
+		fw.eq(texture:GetTexture(), [[Interface\Some\Path]], "the new texture")
+		fw.is_nil(texture:GetAtlas(), "the atlas SetTexture left behind")
+	end)
+
+	fw.it("clears a texture set earlier when an atlas is set over it", function()
+		texture:SetTexture([[Interface\Some\Path]])
+		texture:SetAtlas("some-atlas")
+
+		fw.eq(texture:GetAtlas(), "some-atlas", "the new atlas")
+		fw.is_nil(texture:GetTexture(), "the texture SetAtlas left behind")
+	end)
+end)
+
 fw.describe("WowMock - C_CurveUtil.EvaluateColorValueFromBoolean", function()
 	fw.before_each(function()
 		WowMock.Install()
