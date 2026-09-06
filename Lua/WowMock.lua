@@ -3406,8 +3406,8 @@ function M.Install(options)
 
 	_G.SetCVar = noop
 
-	_G.GetCVarBool = function()
-		return false
+	_G.GetCVarBool = function(name)
+		return _G.C_CVar.GetCVar(name) == "1"
 	end
 
 	-- C_ namespaces
@@ -3451,6 +3451,9 @@ function M.Install(options)
 		SetCVarBitfield = noop,
 		GetCVarBitfield = function()
 			return false
+		end,
+		GetCVarBool = function(name)
+			return _G.C_CVar.GetCVar(name) == "1"
 		end,
 	}
 
