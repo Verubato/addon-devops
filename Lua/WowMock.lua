@@ -68,6 +68,21 @@ local function unwrapSecret(value)
 	return box.value, true
 end
 
+-- A metatable cannot trap type(), so a secret proxy would read back as "table".
+local realType = type
+
+M.RealType = realType
+
+_G.type = function(value)
+	local box = secrets[value]
+
+	if box == nil then
+		return realType(value)
+	end
+
+	return realType(box.value)
+end
+
 local function forbidSecret(operation)
 	return function()
 		error("secret value: " .. operation .. " is forbidden on a secret value, pass it to a secure setter instead", 2)
@@ -94,6 +109,15 @@ local secretMeta = {
 	__index = forbidSecret("indexing"),
 	__newindex = forbidSecret("assignment"),
 }
+
+---Mirrors the client raising when a plain table is indexed with a secret key.
+local function forbidSecretKey(_, key)
+	if secrets[key] ~= nil then
+		error("attempted to index a table that cannot be indexed with secret keys", 2)
+	end
+
+	return nil
+end
 
 -- Widget internals
 
@@ -2378,7 +2402,7 @@ function M.Install(options)
 	_G.DEBUFF_TYPE_POISON_COLOR = { r = 0, g = 0.6, b = 0 }
 	_G.DEBUFF_TYPE_BLEED_COLOR = { r = 0.8, g = 0, b = 0 }
 
-	_G.RAID_CLASS_COLORS = {}
+	_G.RAID_CLASS_COLORS = setmetatable({}, { __index = forbidSecretKey })
 	_G.CUSTOM_CLASS_COLORS = nil
 
 	local classTokens = {
@@ -2413,6 +2437,24 @@ function M.Install(options)
 			end,
 		}
 	end
+
+	-- The real API's own table, kept apart from RAID_CLASS_COLORS so a test can tell which
+	-- path answered a lookup.
+	local secretClassColors = {
+		WARRIOR = { r = 0.78, g = 0.61, b = 0.43 },
+		PALADIN = { r = 0.96, g = 0.55, b = 0.73 },
+		HUNTER = { r = 0.67, g = 0.83, b = 0.45 },
+		ROGUE = { r = 1.00, g = 0.96, b = 0.41 },
+		PRIEST = { r = 1.00, g = 1.00, b = 1.00 },
+		DEATHKNIGHT = { r = 0.77, g = 0.12, b = 0.23 },
+		SHAMAN = { r = 0.00, g = 0.44, b = 0.87 },
+		MAGE = { r = 0.25, g = 0.78, b = 0.92 },
+		WARLOCK = { r = 0.53, g = 0.53, b = 0.93 },
+		MONK = { r = 0.00, g = 1.00, b = 0.59 },
+		DRUID = { r = 1.00, g = 0.49, b = 0.04 },
+		DEMONHUNTER = { r = 0.64, g = 0.19, b = 0.79 },
+		EVOKER = { r = 0.20, g = 0.58, b = 0.50 },
+	}
 
 	_G.LOCALIZED_CLASS_NAMES_MALE = {}
 	_G.LOCALIZED_CLASS_NAMES_FEMALE = {}
@@ -3582,8 +3624,10 @@ function M.Install(options)
 	}
 
 	_G.C_ClassColor = {
+		-- The real API resolves a secret token itself.
 		GetClassColor = function(token)
-			local color = _G.RAID_CLASS_COLORS[token]
+			local class = unwrapSecret(token)
+			local color = secretClassColors[class]
 			return color and _G.CreateColor(color.r, color.g, color.b, 1) or nil
 		end,
 	}

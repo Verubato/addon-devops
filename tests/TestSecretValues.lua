@@ -42,6 +42,20 @@ fw.describe("WowMock - minting secrets", function()
 		fw.truthy(issecretvalue(WowMock.MakeSecret(false)), "a secret false")
 		fw.truthy(issecretvalue(WowMock.MakeSecret(nil)), "a secret nil")
 	end)
+
+	fw.it("reports the type a secret wraps rather than the proxy's own table type", function()
+		fw.eq(type(WowMock.MakeSecret(42)), "number", "a secret number")
+		fw.eq(type(WowMock.MakeSecret("x")), "string", "a secret string")
+		fw.eq(type(WowMock.MakeSecret(nil)), "nil", "a secret nil")
+		fw.eq(type(42), "number", "a plain value is unaffected")
+	end)
+
+	fw.it("exposes the real type function for a suite that needs the unwrapped answer", function()
+		local secret = WowMock.MakeSecret(42)
+
+		fw.eq(WowMock.RealType(secret), "table", "the proxy really is a table")
+		fw.eq(WowMock.RealType(42), "number", "a plain value is unaffected")
+	end)
 end)
 
 fw.describe("WowMock - forbidden operations on a secret", function()
@@ -137,6 +151,15 @@ fw.describe("WowMock - forbidden operations on a secret", function()
 		AssertRaises("write", "assignment", function()
 			secret.spellId = 1
 		end)
+	end)
+
+	fw.it("refuses indexing a protected plain table with a secret key", function()
+		local message = ErrorFrom(function()
+			return RAID_CLASS_COLORS[secret]
+		end)
+
+		fw.not_nil(message, "raised")
+		fw.truthy(message:find("secret keys", 1, true) ~= nil, "names secret keys: " .. tostring(message))
 	end)
 end)
 
