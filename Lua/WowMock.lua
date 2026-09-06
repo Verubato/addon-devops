@@ -1303,8 +1303,22 @@ function widget:GetAuraGroupFrame(key, index)
 	return group and group.Buttons[index] or nil
 end
 
-function widget:SetAuraGroupLayout() end
-function widget:SetAuraGroupMaxFrameCount() end
+function widget:SetAuraGroupLayout(key, layout)
+	local group = self.__auraGroups and self.__auraGroups[key]
+
+	if group then
+		group.Layout = layout
+	end
+end
+
+function widget:SetAuraGroupMaxFrameCount(key, count)
+	local group = self.__auraGroups and self.__auraGroups[key]
+
+	if group then
+		group.MaxFrameCount = count
+	end
+end
+
 function widget:SetAuraGroupSortMethod() end
 
 function widget:SetAuraGroupFilterString(key, filterString)
