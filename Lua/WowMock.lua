@@ -846,6 +846,17 @@ function widget:GetFont()
 	return font[1], font[2], font[3]
 end
 
+function widget:CopyFontObject(source)
+	local font = _G[source] or source
+
+	self.__font = { font:GetFont() }
+	self.__fontObject = nil
+	self.__copiedFontObject = font
+	self.__textColor = font.__textColor
+	self.__shadowColor = font.__shadowColor
+	self.__shadowOffset = font.__shadowOffset
+end
+
 function widget:SetFontObject(fontObject)
 	self.__fontObject = fontObject
 	self.__font = nil
@@ -1171,7 +1182,9 @@ function widget:SetDrawEdge() end
 function widget:SetDrawSwipe() end
 function widget:SetSwipeColor() end
 function widget:SetSwipeTexture() end
-function widget:SetCountdownFont() end
+function widget:SetCountdownFont(font)
+	self.__countdownFont = font
+end
 function widget:SetCountdownMillisecondsThreshold() end
 function widget:Clear() end
 function widget:Pause_() end
