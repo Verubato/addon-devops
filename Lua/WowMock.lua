@@ -1834,6 +1834,12 @@ function M.SetPlayerClass(token)
 	M.State.Class = { name, token, classIndex }
 end
 
+---Puts a unit on the nameplate that belongs to another realm.
+function M.SetUnitRealm(unit, realm)
+	M.State.Units[unit] = true
+	M.State.UnitRealms[unit] = realm
+end
+
 -- Installation
 
 local function installState()
@@ -1857,6 +1863,8 @@ local function installState()
 		Class = { "Warrior", "WARRIOR", 1 },
 		Realm = "TestRealm",
 		PlayerName = "Tester",
+		-- Which unit tokens GetUnitName treats as being on another realm.
+		UnitRealms = {},
 		-- Printed lines, so a suite can assert an addon stayed quiet on a clean load.
 		Prints = {},
 		-- What C_Secrets.ShouldAurasBeSecret answers. False by default, so an aura path only
@@ -2911,12 +2919,26 @@ function M.Install(options)
 			return nil, nil
 		end
 
-		return unit == "player" and State.PlayerName or unit, nil
+		local name = unit == "player" and State.PlayerName or unit
+
+		return name, State.UnitRealms[unit]
 	end
 
 	_G.UnitNameUnmodified = _G.UnitName
-	_G.GetUnitName = function(unit)
-		return (_G.UnitName(unit))
+
+	-- Blizzard appends this instead of the realm when showServer is false for a unit whose
+	-- realm State.UnitRealms marks as foreign to the player's own.
+	local FOREIGN_SERVER_MARKER = " (*)"
+
+	_G.GetUnitName = function(unit, showServer)
+		local name = (_G.UnitName(unit))
+		local realm = name and State.UnitRealms[unit]
+
+		if not realm then
+			return name
+		end
+
+		return showServer and (name .. "-" .. realm) or (name .. FOREIGN_SERVER_MARKER)
 	end
 
 	_G.UnitClass = function(unit)
@@ -3124,6 +3146,10 @@ function M.Install(options)
 	end
 
 	_G.UnitChannelInfo = function()
+		return nil
+	end
+
+	_G.UnitSpellTargetName = function()
 		return nil
 	end
 

@@ -283,6 +283,36 @@ fw.describe("WowMock - SetTexture and SetAtlas clear each other", function()
 	end)
 end)
 
+fw.describe("WowMock - SetUnitRealm and the unit name globals", function()
+	fw.before_each(function()
+		WowMock.Install()
+	end)
+
+	fw.it("returns the realm as UnitName's second value once one is set", function()
+		WowMock.SetUnitRealm("nameplate1", "OtherRealm")
+
+		local name, realm = UnitName("nameplate1")
+
+		fw.eq(name, "nameplate1", "the bare name")
+		fw.eq(realm, "OtherRealm", "the realm SetUnitRealm put on the unit")
+	end)
+
+	fw.it("gives a unit with no realm set a nil second value", function()
+		WowMock.State.Units["nameplate1"] = true
+
+		local _, realm = UnitName("nameplate1")
+
+		fw.is_nil(realm, "no realm was set")
+	end)
+
+	fw.it("appends the realm through GetUnitName when showServer is asked for", function()
+		WowMock.SetUnitRealm("nameplate1", "OtherRealm")
+
+		fw.eq(GetUnitName("nameplate1", true), "nameplate1-OtherRealm", "name and realm")
+		fw.eq(GetUnitName("nameplate1", false), "nameplate1 (*)", "the foreign marker instead")
+	end)
+end)
+
 fw.describe("WowMock - C_CurveUtil.EvaluateColorValueFromBoolean", function()
 	fw.before_each(function()
 		WowMock.Install()
