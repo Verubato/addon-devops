@@ -230,6 +230,17 @@ fw.describe("WowMock - string.format on a secret", function()
 		fw.eq(plain, "3_x", "the formatted string")
 		fw.falsy(issecretvalue(plain), "nothing secret went in")
 	end)
+
+	fw.it("lets a minted result be collected, so a formatting loop does not exhaust memory", function()
+		local watch = setmetatable({}, { __mode = "v" })
+
+		watch.result = string.format("%d", WowMock.MakeSecret(7))
+
+		collectgarbage("collect")
+		collectgarbage("collect")
+
+		fw.truthy(watch.result == nil, "the formatted secret after a collection")
+	end)
 end)
 
 fw.describe("WowMock - secure setters", function()

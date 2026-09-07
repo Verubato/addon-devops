@@ -56,7 +56,12 @@ end
 
 -- Minted secret values, keyed by the proxy handed out. The underlying value is boxed because a
 -- secret can wrap false or nil, which a bare registry entry could not tell from absence.
-local secrets = {}
+-- Weak keys, so a proxy the caller dropped does not pin its box for the whole run.
+local function newSecretRegistry()
+	return setmetatable({}, { __mode = "k" })
+end
+
+local secrets = newSecretRegistry()
 
 local function unwrapSecret(value)
 	local box = secrets[value]
@@ -1939,7 +1944,7 @@ function M.Install(options)
 	timers = {}
 	tickers = {}
 	frameCounter = 0
-	secrets = {}
+	secrets = newSecretRegistry()
 
 	local State = M.State
 
@@ -2038,18 +2043,30 @@ function M.Install(options)
 	string.format = function(template, ...) -- luacheck: ignore 122
 		local plainTemplate, anySecret = unwrapSecret(template)
 		local count = select("#", ...)
+
+		if not anySecret then
+			for index = 1, count do
+				local _, wasSecret = unwrapSecret((select(index, ...)))
+
+				if wasSecret then
+					anySecret = true
+					break
+				end
+			end
+		end
+
+		-- The overwhelmingly common call has nothing secret in it, so it allocates nothing.
+		if not anySecret then
+			return format(plainTemplate, ...)
+		end
+
 		local args = {}
 
 		for index = 1, count do
-			local plain, wasSecret = unwrapSecret((select(index, ...)))
-
-			args[index] = plain
-			anySecret = anySecret or wasSecret
+			args[index] = (unwrapSecret((select(index, ...))))
 		end
 
-		local result = format(plainTemplate, unpack(args, 1, count))
-
-		return anySecret and M.MakeSecret(result) or result
+		return M.MakeSecret(format(plainTemplate, unpack(args, 1, count)))
 	end
 
 	-- Assigned here rather than beside the other aliases, which run before the wrapper exists.
