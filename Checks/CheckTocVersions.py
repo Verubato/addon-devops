@@ -11,7 +11,7 @@ expand it instead, and the resulting HTML table is scraped.
 A client marks an addon out of date unless the exact interface number of that client appears in
 the TOC's list, so "5.5.3 when live is 5.5.4" is enough to make it load with the out-of-date
 warning. An addon only cares about the clients it actually ships for, so a live client is only
-compared against a TOC that already lists SOME interface with the same major version - MiniCC
+compared against a TOC that already lists SOME interface on the same expansion line - MiniCC
 targeting only 12.x is not behind on Classic Era, it simply does not support it.
 
 An addon behind a LIVE client fails the build - it is greyed out in the character-select addon
@@ -143,6 +143,9 @@ def toc_interfaces(text):
 
 def major(interface):
     """12.0.7 -> 12. The expansion line an interface number belongs to."""
+    # Classic Beta runs as 1.60.x beside the 1.15.x Classic Era client, so it is its own line.
+    if 16000 <= interface < 20000:
+        return 160
     return interface // 10000
 
 
@@ -269,6 +272,15 @@ SELF_TEST_HTML = """
 <td><span title="2026-07-23">2026-07-23</span>
 </td></tr>
 <tr>
+<td><a title="Classic Era"><span title="wow_classic_era">Classic Era</span></a></td>
+<td><span class="icon"><img alt="Classic" src="/z.png"/></span></td>
+<td><a title="World of Warcraft Classic">World of Warcraft Classic</a></td>
+<td><a title="1.15.9">1.15.9</a></td>
+<td><code>11509</code></td>
+<td>69722</td>
+<td><span title="2026-09-04">2026-09-04</span>
+</td></tr>
+<tr>
 <td><a title="Classic"><span title="wow_classic">Classic</span></a></td>
 <td><span class="icon"><img alt="Mists" src="/y.png"/></span></td>
 <td><a title="Mists of Pandaria Classic">Mists of Pandaria Classic</a></td>
@@ -289,6 +301,7 @@ SELF_TEST_CASES = [
     # 11.x is a line no live client is on any more, so it is nobody's business but the author's.
     ("legacy line only", "## Interface: 110207\n", [], []),
     ("ptr not adopted", "## Interface: 120007\n", [], [120100]),
+    ("classic beta beside era", "## Interface: 120007, 16001\n", [], [120100]),
     ("split directives", "## Interface-Mainline: 120007\n## Interface-Mists: 50503\n", [50504], [120100]),
 ]
 
@@ -297,7 +310,8 @@ def self_test():
     clients = parse_builds(SELF_TEST_HTML)
     failures = 0
 
-    expected = [("wow", True, 120007), ("wowt", False, 120100), ("wow_classic", True, 50504)]
+    expected = [("wow", True, 120007), ("wowt", False, 120100), ("wow_classic_era", True, 11509),
+                ("wow_classic", True, 50504)]
     actual = [(c["product"], c["live"], c["interface"]) for c in clients]
 
     if actual != expected:
